@@ -13,10 +13,10 @@
     ...
   }@inputs: flake-parts.lib.mkFlake { inherit inputs; } ({ lib, inputs, ... }: {
     systems = import inputs.systems;
-    flake.overlays.default = import ./pkgs/overlay.nix;
+    flake.overlays.default = import ./pkgs/overlay.nix inputs;
     perSystem = { pkgs, ... }:
     let
-      pkgsTenstorrent = pkgs.callPackages ./pkgs/default.nix { };
+      pkgsTenstorrent = pkgs.callPackages ./pkgs/default.nix { inherit inputs; };
     in {
       packages = pkgsTenstorrent;
     };
