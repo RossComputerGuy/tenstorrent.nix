@@ -4,6 +4,7 @@
   newScope,
   buildPackages,
   callPackage,
+  linux,
 }@pkgs:
 lib.makeScope newScope (self: with self;
 let
@@ -21,6 +22,7 @@ let
     depsBuildBuild = [ buildPackages.stdenv.cc ];
   };
 in {
-  metal = callPackage ./metal { inherit isl_0_23; };
-  logger = callPackage ./logger { };
+  metal = self.callPackage ./metal { inherit isl_0_23; };
+  kmd = self.callPackage ./kmd { kernel = linux; };
+  logger = self.callPackage ./logger {};
 })

@@ -19,7 +19,7 @@
   hwloc,
   python3,
 }:
-(overrideCC stdenv llvmPackages_17.clangUseLLVM).mkDerivation (finalAttrs: {
+stdenv.mkDerivation (finalAttrs: {
   pname = "tt-metal";
   version = "0.59.1";
 
