@@ -24,5 +24,4 @@ let
 in {
   metal = self.callPackage ./metal { inherit isl_0_23; };
   kmd = self.callPackage ./kmd { kernel = linux; };
-  logger = self.callPackage ./logger {};
 })
