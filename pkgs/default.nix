@@ -11,6 +11,30 @@ lib.makeScope newScope (
   self:
   with self;
   let
+    pre-commit =
+      pkgs.callPackage
+        (
+          {
+            lib,
+            buildPythonPackage,
+            fetchFromGitHub,
+          }:
+          buildPythonPackage rec {
+            pname = "pre-commit";
+            version = "4.2.0";
+
+            src = fetchFromGitHub {
+              owner = "pre-commit";
+              repo = "pre-commit";
+              tag = "v${version}";
+              hash = "sha256-rUhI9NaxyRfLu/mfLwd5B0ybSnlAQV2Urx6+fef0sGM=";
+            };
+          }
+        )
+        {
+          inherit (python3Packages) buildPythonPackage;
+        };
+
     isl_0_23 =
       (pkgs.callPackage (import "${inputs.nixpkgs}/pkgs/development/libraries/isl/generic.nix" rec {
         version = "0.23";
@@ -31,13 +55,43 @@ lib.makeScope newScope (
     metal = self.callPackage ./metal { inherit isl_0_23; };
     kmd = self.callPackage ./kmd { kernel = linux; };
     tools-common = self.callPackage ./tools-common {
-      inherit (python3Packages) buildPythonApplication setuptools distro elasticsearch psutil pyyaml rich textual requests tqdm pydantic;
+      inherit (python3Packages)
+        buildPythonApplication
+        setuptools
+        distro
+        elasticsearch
+        psutil
+        pyyaml
+        rich
+        textual
+        requests
+        tqdm
+        pydantic
+        ;
     };
     pyluwen = self.callPackage ./pyluwen {
       inherit (python3Packages) buildPythonApplication;
     };
     flash = self.callPackage ./flash {
-      inherit (python3Packages) buildPythonApplication setuptools tabulate pyyaml;
+      inherit (python3Packages)
+        buildPythonApplication
+        setuptools
+        tabulate
+        pyyaml
+        ;
+    };
+    smi = self.callPackage ./smi {
+      inherit (python3Packages)
+        buildPythonApplication
+        setuptools
+        distro
+        elasticsearch
+        pydantic
+        rich
+        textual
+        importlib-resources
+        ;
+      inherit pre-commit;
     };
   }
 )
