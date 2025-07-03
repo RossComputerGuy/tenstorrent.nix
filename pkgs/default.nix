@@ -11,30 +11,6 @@ lib.makeScope newScope (
   self:
   with self;
   let
-    pre-commit =
-      pkgs.callPackage
-        (
-          {
-            lib,
-            buildPythonPackage,
-            fetchFromGitHub,
-          }:
-          buildPythonPackage rec {
-            pname = "pre-commit";
-            version = "4.2.0";
-
-            src = fetchFromGitHub {
-              owner = "pre-commit";
-              repo = "pre-commit";
-              tag = "v${version}";
-              hash = "sha256-rUhI9NaxyRfLu/mfLwd5B0ybSnlAQV2Urx6+fef0sGM=";
-            };
-          }
-        )
-        {
-          inherit (python3Packages) buildPythonPackage;
-        };
-
     isl_0_23 =
       (pkgs.callPackage (import "${inputs.nixpkgs}/pkgs/development/libraries/isl/generic.nix" rec {
         version = "0.23";
@@ -91,7 +67,6 @@ lib.makeScope newScope (
         textual
         importlib-resources
         ;
-      inherit pre-commit;
     };
   }
 )

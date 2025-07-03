@@ -50,6 +50,9 @@ buildPythonApplication rec {
     setuptools
   ];
 
+  # Fails due to having no tests
+  doInstallCheck = false;
+
   meta = {
     description = "Tenstorrent console based hardware information program";
     homepage = "https://github.com/tenstorrent/tt-smi";
