@@ -79,5 +79,12 @@ lib.makeScope newScope (
         matplotlib
         ;
     };
+    burnin = self.callPackage ./burnin {
+      inherit (python3Packages)
+        buildPythonApplication
+        setuptools
+        jsons
+        ;
+    };
   }
 )
