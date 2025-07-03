@@ -51,7 +51,7 @@ buildPythonApplication rec {
   ];
 
   # Fails due to having no tests
-  doInstallCheck = false;
+  dontUsePytestCheck = true;
 
   meta = {
     description = "Tenstorrent console based hardware information program";

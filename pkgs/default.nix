@@ -86,6 +86,7 @@ lib.makeScope newScope (
         jsons
         ;
     };
-    luwen = self.callPackage ./luwen {};
+    luwen = self.callPackage ./luwen { };
+    system-tools = self.callPackage ./system-tools { };
   }
 )
