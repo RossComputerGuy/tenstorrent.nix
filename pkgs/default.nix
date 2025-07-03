@@ -68,5 +68,16 @@ lib.makeScope newScope (
         importlib-resources
         ;
     };
+    topology = self.callPackage ./topology {
+      inherit (python3Packages)
+        buildPythonApplication
+        setuptools
+        black
+        elasticsearch
+        pydantic
+        networkx
+        matplotlib
+        ;
+    };
   }
 )
