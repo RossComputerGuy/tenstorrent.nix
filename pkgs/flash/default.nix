@@ -11,14 +11,14 @@
 }:
 buildPythonApplication rec {
   pname = "tt-flash";
-  version = "3.3.3";
+  version = "3.3.5";
   pyproject = true;
 
   src = fetchFromGitHub {
     owner = "tenstorrent";
     repo = pname;
     tag = "v${version}";
-    hash = "sha256-edWogH/HZZlGwyiqGbj6vunNxhsCr/+3LzmFgFGzjck=";
+    hash = "sha256-6NPB8Kf6pCeP2aPL9DxKklG96rRMOSaqi4RSZ989jv0=";
   };
 
   patches = [

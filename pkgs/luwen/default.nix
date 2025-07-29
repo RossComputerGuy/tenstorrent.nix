@@ -2,19 +2,28 @@
   lib,
   rustPlatform,
   fetchFromGitHub,
+  protobuf,
 }:
 rustPlatform.buildRustPackage (finalAttrs: {
   pname = "luwen";
-  version = "0.7.3";
+  version = "0.7.10";
 
   src = fetchFromGitHub {
     owner = "tenstorrent";
     repo = finalAttrs.pname;
     tag = "v${finalAttrs.version}";
-    hash = "sha256-P/D9u620OxJGoJO41D5okJcoBGXDDIoYwIIMIDS5Uv0=";
+    hash = "sha256-zhj4e6pRuCYLUYMWCcmPVIZbe3cUitHi3VzprSi/oqA=";
   };
 
-  cargoHash = "sha256-3jxFjydslWax5Ub0G8UNT11gZbPZpPvK8U1+1nlKb38=";
+  nativeBuildInputs = [
+    protobuf
+  ];
+
+  patches = [
+    ./fix-pcie65.patch
+  ];
+
+  cargoHash = "sha256-j0So1lGg39qvi39FBDSQn6advxlilS6CAqTuWl979lE=";
 
   meta = {
     description = "Tenstorrent system interface library";
