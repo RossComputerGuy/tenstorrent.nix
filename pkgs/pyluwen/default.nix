@@ -9,26 +9,22 @@
 }:
 buildPythonApplication rec {
   pname = "pyluwen";
-  version = "0.7.10";
+  version = "0.7.11";
   pyproject = true;
 
   src = fetchFromGitHub {
     owner = "tenstorrent";
     repo = "luwen";
     tag = "v${version}";
-    hash = "sha256-zhj4e6pRuCYLUYMWCcmPVIZbe3cUitHi3VzprSi/oqA=";
+    hash = "sha256-eQpKEeuy0mVrmu8ssAOWBcXi7zutStu+RbZOEF/IJ98=";
   };
 
   cargoDeps = rustPlatform.fetchCargoVendor {
     inherit src;
-    hash = "sha256-j0So1lGg39qvi39FBDSQn6advxlilS6CAqTuWl979lE=";
+    hash = "sha256-INzF8ORkrmPQMJbGSNm5QkfMOgE+HJ3taU1EZ9i+HJg=";
   };
 
   sourceRoot = "${src.name}/crates/${pname}";
-
-  patches = [
-    ../luwen/fix-pcie65.patch
-  ];
 
   prePatch = ''
     chmod -R u+w ../../
