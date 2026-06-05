@@ -6,27 +6,23 @@
 }:
 rustPlatform.buildRustPackage (finalAttrs: {
   pname = "luwen";
-  version = "0.7.10";
+  version = "0.8.5";
 
   src = fetchFromGitHub {
     owner = "tenstorrent";
-    repo = finalAttrs.pname;
+    repo = "luwen";
     tag = "v${finalAttrs.version}";
-    hash = "sha256-zhj4e6pRuCYLUYMWCcmPVIZbe3cUitHi3VzprSi/oqA=";
+    hash = "sha256-lY7cZ+8C0UEGGYxufl4Vi8g0L4AJFXaGqn7XE2ivTcQ=";
   };
 
   nativeBuildInputs = [
     protobuf
   ];
 
-  patches = [
-    ./fix-pcie65.patch
-  ];
-
-  cargoHash = "sha256-j0So1lGg39qvi39FBDSQn6advxlilS6CAqTuWl979lE=";
+  cargoHash = "sha256-QBGXbRiBk4WIQFopq1OccmUHgx5GzR/PKhMH4Ie+fyg=";
 
   meta = {
-    description = "Tenstorrent system interface library";
+    description = "Tenstorrent system interface tools";
     homepage = "https://github.com/tenstorrent/luwen";
     maintainers = with lib.maintainers; [ RossComputerGuy ];
     license = with lib.licenses; [ asl20 ];

@@ -3,33 +3,42 @@
   stdenv,
   fetchFromGitHub,
   kernel,
+  kernelModuleMakeFlags,
 }:
 stdenv.mkDerivation (finalAttrs: {
   pname = "tt-kmd";
-  version = "2.0.0";
+  version = "2.7.0";
 
   src = fetchFromGitHub {
     owner = "tenstorrent";
-    repo = finalAttrs.pname;
+    repo = "tt-kmd";
     tag = "ttkmd-${finalAttrs.version}";
-    hash = "sha256-Y85857oWzsltRyRWpK8Wi0H38mBFwqM3+iXkwVK4DPY=";
+    hash = "sha256-+4Wqj91EsPthKQXajiDd9Y77oTp9BNqCgFCQrTAp6ag=";
   };
 
   nativeBuildInputs = kernel.moduleBuildDependencies;
+
+  makeFlags = kernelModuleMakeFlags;
 
   buildFlags = [
     "KDIR=${kernel.dev}/lib/modules/${kernel.modDirVersion}/build"
   ];
 
-  installPhase = ''
-    install -D tenstorrent.ko $out/lib/modules/${kernel.modDirVersion}/extra/tensorrent.ko
+  installFlags = finalAttrs.buildFlags ++ [
+    "INSTALL_MOD_PATH=${placeholder "out"}"
+    "INSTALL_MOD_DIR=misc"
+  ];
+
+  installTargets = [ "modules_install" ];
+
+  postInstall = ''
     mkdir -p $out/lib/udev/rules.d
     cp udev-50-tenstorrent.rules $out/lib/udev/rules.d/50-tenstorrent.rules
   '';
 
   meta = {
     description = "Tenstorrent Kernel Module";
-    homepage = "https://tenstorrent.com";
+    homepage = "https://github.com/tenstorrent/tt-kmd";
     maintainers = with lib.maintainers; [ RossComputerGuy ];
     license = with lib.licenses; [ gpl2Only ];
     platforms = lib.platforms.linux;

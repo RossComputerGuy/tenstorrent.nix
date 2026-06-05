@@ -1,43 +1,30 @@
 {
   lib,
-  buildPythonApplication,
+  python3Packages,
   fetchFromGitHub,
-  fetchpatch,
-  setuptools,
-  distro,
-  elasticsearch,
-  pydantic,
-  pyluwen,
-  rich,
-  textual,
   pre-commit,
-  importlib-resources,
-  tools-common,
+  versionCheckHook,
+  tt-umd,
 }:
-buildPythonApplication rec {
+python3Packages.buildPythonApplication (finalAttrs: {
   pname = "tt-smi";
-  version = "3.0.21";
+  version = "5.2.0";
   pyproject = true;
 
   src = fetchFromGitHub {
     owner = "tenstorrent";
-    repo = pname;
-    tag = "v${version}";
-    hash = "sha256-6LWx/KkOOAG+dqN0idfY2/ehyUSq5gJpL151pthBXgU=";
+    repo = "tt-smi";
+    tag = "v${finalAttrs.version}";
+    hash = "sha256-meDqvDvGBXx/zbHbtgLUb+Kv8LSmsu9OvYCFhmEPAdQ=";
   };
 
-  patches = [
-    (fetchpatch {
-      url = "https://github.com/RossComputerGuy/tt-smi/commit/f44623b69050eeafc278348549083810c0972295.patch";
-      hash = "sha256-6qZ/LHf/SiVNyp4Eit696hCj39jrqHKopcWBwA5SKKU=";
-    })
-  ];
-
-  build-system = [
+  build-system = with python3Packages; [
     setuptools
   ];
 
-  dependencies = [
+  pythonRelaxDeps = [ "tt-umd" ];
+
+  dependencies = with python3Packages; [
     distro
     elasticsearch
     pydantic
@@ -46,17 +33,24 @@ buildPythonApplication rec {
     textual
     pre-commit
     importlib-resources
-    tools-common
+    tt-tools-common
     setuptools
+    tomli
+    tt-umd
+  ];
+
+  nativeCheckInputs = [
+    versionCheckHook
   ];
 
   # Fails due to having no tests
   dontUsePytestCheck = true;
 
   meta = {
+    mainProgram = "tt-smi";
     description = "Tenstorrent console based hardware information program";
     homepage = "https://github.com/tenstorrent/tt-smi";
     maintainers = with lib.maintainers; [ RossComputerGuy ];
     license = with lib.licenses; [ asl20 ];
   };
-}
+})

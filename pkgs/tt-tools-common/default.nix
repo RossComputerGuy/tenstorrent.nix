@@ -1,7 +1,6 @@
 {
   lib,
-  buildPythonApplication,
-  fetchpatch,
+  buildPythonPackage,
   fetchFromGitHub,
   setuptools,
   distro,
@@ -11,30 +10,26 @@
   rich,
   textual,
   requests,
+  tomli,
   tqdm,
   pydantic,
+  setuptools-scm,
 }:
-buildPythonApplication rec {
+buildPythonPackage rec {
   pname = "tt-tools-common";
-  version = "1.4.16";
+  version = "1.6.0";
   pyproject = true;
 
   src = fetchFromGitHub {
     owner = "tenstorrent";
-    repo = pname;
+    repo = "tt-tools-common";
     tag = "v${version}";
-    hash = "sha256-P1cdRqQOOzz9Ax+SqJl5mS1wjZGSBS5tXnaWD1qRNHo=";
+    hash = "sha256-xy1UxETmuuqDmZYf67+qx8Yr8tWQ6VKmjb3md8IaInE=";
   };
-
-  patches = [
-    (fetchpatch {
-      url = "https://github.com/danieldegrasse/tt-tools-common/commit/6ef07e64132262a40507aeb613c0de3d94b05bfe.patch";
-      hash = "sha256-uPWQMG9pRsC37NPkkZ6h8JWpj/3FuIZk40XKmTW7VRE=";
-    })
-  ];
 
   build-system = [
     setuptools
+    setuptools-scm
   ];
 
   dependencies = [
@@ -45,12 +40,13 @@ buildPythonApplication rec {
     rich
     textual
     requests
+    tomli
     tqdm
     pydantic
   ];
 
   meta = {
-    description = "This is a space for common utilities shared across Tentorrent tools. This is a helper library and not a standalone tool.";
+    description = "Helper library for common utilities shared across Tentorrent tools";
     homepage = "https://github.com/tenstorrent/tt-tools-common";
     maintainers = with lib.maintainers; [ RossComputerGuy ];
     license = with lib.licenses; [ asl20 ];
