@@ -111,6 +111,7 @@
       for exe in $out/bin/*; do
         if [ -f "$exe" ] && [ ! -L "$exe" ]; then
           wrapProgram "$exe" \
+            --set-default HOME "/tmp" \
             --set-default TT_METAL_HOME "${ttRoot}" \
             --set-default TT_METAL_RUNTIME_ROOT "${ttRoot}"
         fi
