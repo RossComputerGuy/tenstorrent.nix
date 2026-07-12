@@ -13,7 +13,7 @@
   expat,
 }:
 let
-  version = "7.49.0";
+  version = "7.64.0";
 in
 runCommand "sfpi-${version}"
   {
@@ -37,11 +37,11 @@ runCommand "sfpi-${version}"
       {
         aarch64-linux = fetchurl {
           url = "https://github.com/tenstorrent/sfpi/releases/download/${version}/sfpi_${version}_aarch64_debian.txz";
-          hash = "sha256-HcoCLB4Jl2QyX5gznnfO/4wtzsWcyhwCXNqUBJljJX4=";
+          hash = "sha256-kQ3/x8isI3vR+pTazRLiQoCc2YMrsPxaJe3FbxZOEdU=";
         };
         x86_64-linux = fetchurl {
           url = "https://github.com/tenstorrent/sfpi/releases/download/${version}/sfpi_${version}_x86_64_debian.txz";
-          hash = "sha256-CxlaPhFQfe1FY+wDwwUAgUbFX7I/1q5zvqb/4WmJOb0=";
+          hash = "sha256-N1win3QiwH8cxmjJQP5m4U21Ih3/XnoqssNtgSH9HAs=";
         };
       }
       ."${stdenv.hostPlatform.system}" or (throw "SFPI does not support ${stdenv.hostPlatform.system}");

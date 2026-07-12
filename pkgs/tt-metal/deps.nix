@@ -43,8 +43,8 @@ in
   libdwarf = fetchFromGitHub {
     owner = "davea42";
     repo = "libdwarf-code";
-    tag = "v0.12.0";
-    hash = "sha256-6zhtQDB1iwkyTErdYr2tItgnyRgYqO+vp6F5lapeeWY=";
+    tag = "v2.3.1";
+    hash = "sha256-azVCzQt9oA40YACa9PkdNt0D8vWRNHXXGoSFOYNJxgA=";
   };
   flatbuffers = fetchFromGitHub {
     owner = "google";
@@ -96,5 +96,17 @@ in
     repo = "tracy";
     rev = "0aaefbb689b4c60694edc905545fc4709fd13f6a";
     hash = "sha256-hnWNjkvrQ/uDdULhhB87OLVeHiS7zseY1+7or7F35uU=";
+  };
+  ttexalens = fetchFromGitHub {
+    owner = "tenstorrent";
+    repo = "tt-exalens";
+    rev = "6f5720240b7254b25cb3d78aef81769fc12a30f9";
+    hash = "sha256-QX9fh4KPJEj4AQjDViPQgVW1JxOADWJk0SlASLJTUCY=";
+  };
+  elfio = fetchFromGitHub {
+    owner = "serge1";
+    repo = "ELFIO";
+    tag = "Release_3.12";
+    hash = "sha256-tDRBscs2L/3gYgLQvb1+8nNxqkr8v1xBkeDXuOqShX4=";
   };
 }

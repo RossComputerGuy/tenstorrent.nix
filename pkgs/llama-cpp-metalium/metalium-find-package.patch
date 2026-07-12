@@ -1,5 +1,4 @@
 diff --git a/ggml/src/ggml-metalium/CMakeLists.txt b/ggml/src/ggml-metalium/CMakeLists.txt
-index 6838306..345bacf 100644
 --- a/ggml/src/ggml-metalium/CMakeLists.txt
 +++ b/ggml/src/ggml-metalium/CMakeLists.txt
 @@ -1,6 +1,6 @@
@@ -12,7 +11,7 @@ index 6838306..345bacf 100644
  
  message(STATUS "Metalium found.")
  
-@@ -9,49 +9,16 @@ ggml_add_backend_library(ggml-metalium
+@@ -16,45 +16,14 @@
  )
  
  target_include_directories(ggml-metalium PRIVATE
@@ -38,7 +37,7 @@ index 6838306..345bacf 100644
 -    $ENV{TT_METAL_HOME}/ttnn/api
 -    $ENV{TT_METAL_HOME}/ttnn/cpp
 -
--    # Parent GGML stuff
+     # Parent GGML stuff
      ..
  )
  
@@ -59,128 +58,4 @@ index 6838306..345bacf 100644
 -
      ggml-base
  )
- 
--
- target_compile_definitions(
-     ggml-metalium PRIVATE
-     FMT_HEADER_ONLY
-diff --git a/ggml/src/ggml-metalium/ggml-metalium.cpp b/ggml/src/ggml-metalium/ggml-metalium.cpp
-index be5377b..55997ae 100644
---- a/ggml/src/ggml-metalium/ggml-metalium.cpp
-+++ b/ggml/src/ggml-metalium/ggml-metalium.cpp
-@@ -17,7 +17,7 @@
- #include "ttnn/tensor/tensor.hpp"
- #include "ttnn/tensor/types.hpp"
- #include "ttnn/types.hpp"
--#include "types/arch.h"
-+#include "umd/device/types/arch.hpp"
- #include <sys/types.h>
- #include <algorithm>
- #include <array>
-@@ -42,7 +42,7 @@
- #include <ttnn/operations/normalization/rmsnorm/rmsnorm.hpp>
- #include <ttnn/operations/data_movement/untilize/untilize.hpp>
- #include <ttnn/operations/experimental/transformer/nlp_kv_cache_load_slice/nlp_kv_cache_load_slice.hpp>
--#include <ttnn/operations/creation.hpp>
-+#include <ttnn/operations/creation/creation.hpp>
- #include <ttnn/operations/eltwise/unary/unary_composite.hpp>
- #include <ttnn/operations/data_movement/transpose/transpose.hpp>
- #include <ttnn/operations/data_movement/permute/permute.hpp>
-@@ -50,7 +50,6 @@
- #include <ttnn/operations/data_movement/concat/concat.hpp>
- #include <ttnn/operations/copy/typecast/typecast.hpp>
- #include <ttnn/operations/normalization/softmax/softmax.hpp>
--#include <tt-metalium/persistent_kernel_cache.hpp>
- #include <ttnn/operations/data_movement/reshape_view/reshape.hpp>
- #include <ttnn/operations/reduction/generic/generic_reductions.hpp>
- 
-@@ -420,9 +419,7 @@ static void tensor2ggml(const tt::tt_metal::Tensor& tensor, void* dst, ggml_type
- 
-     tt::tt_metal::Tensor row_major_tensor = ttnn::untilize(tensor).cpu();
-     GGML_ASSERT(row_major_tensor.storage_type() == tt::tt_metal::StorageType::HOST);
--    GGML_ASSERT(std::holds_alternative<tt::tt_metal::HostStorage>(row_major_tensor.storage()));
--
--    const tt::tt_metal::HostStorage& storage = std::get<tt::tt_metal::HostStorage>(row_major_tensor.storage());
-+    const tt::tt_metal::HostStorage& storage = row_major_tensor.host_storage();
-     const auto buffer = storage.buffer().get_shard({0, 0}).value();
-     auto view = buffer.view_as<SrcType>();
-     const SrcType* buf = &view[0];
-@@ -458,7 +455,7 @@ static void tensor2ggml(const tt::tt_metal::Tensor& tensor, void* dst, ggml_type
- 
-     auto src_adaptor = [](const SrcType& src) -> float {
-         if constexpr(std::is_same_v<SrcType, bfloat16>) {
--            return src.to_float();
-+            return static_cast<float>(src);
-         }
-         else if (std::is_same_v<SrcType, float>) {
-             return src;
-@@ -864,15 +861,10 @@ static void ggml_backend_metalium_mul_mat(ggml_backend_metalium_context * ctx, s
-         }
-         // TODO: Ask TT to support multiplication of pre-transposed tensors. Calling transpose here is inefficient
-         // https://github.com/tenstorrent/tt-metal/issues/9709
--        ttnn::operations::matmul::Matmul cfg = ttnn::operations::matmul::Matmul{
--            .compute_kernel_config = make_compute_kernel_config(a.device()),
--            // XXX: Why output_tile doesn't have a default value?
--            .output_tile = std::nullopt,
--            .global_cb = std::nullopt,
--            .sub_device_id = std::nullopt,
--        };
-         *cm = {
--            .tensor = std::make_shared<tt::tt_metal::Tensor>(ttnn::operations::matmul::matmul(b, aT, std::nullopt, cfg)),
-+            .tensor = std::make_shared<tt::tt_metal::Tensor>(ttnn::operations::matmul::matmul(
-+                b, aT, false, false, std::nullopt, std::nullopt, std::nullopt, std::nullopt,
-+                make_compute_kernel_config(a.device()))),
-             .ggtype = dst->type,
-             .bufctx = cm->bufctx
-         };
-@@ -2420,8 +2412,7 @@ static bool ggml_backend_metalium_device_supports_buft(ggml_backend_dev_t dev, g
- static void ggml_backend_metalium_synchronize(ggml_backend_t backend)
- {
-     return;
--    ggml_backend_metalium_context * ctx = (ggml_backend_metalium_context *)backend->context;
--    tt::tt_metal::Finish(ctx->device->get_mesh_device()->get_device(0)->command_queue());
-+    GGML_UNUSED(backend);
- }
- 
- static struct ggml_backend_i metalium_backend_i = {
-@@ -2597,8 +2588,8 @@ GGML_BACKEND_API ggml_backend_reg_t ggml_backend_metalium_reg()
-             fmt::println(stderr, "The TT_METAL_HOME environment variables must be set to use the Metalium backend");
-             abort();
-         }
--        if(!g_debug_flags.disable_program_cache) {
--            tt::tt_metal::detail::EnablePersistentKernelCache();
-+        if(g_debug_flags.disable_program_cache) {
-+            fmt::println("Persistent kernel cache is always enabled with this tt-metal version");
-         }
-         // TODO: Support multiple devices (TT supports mesh configuration so it's going to be tricky)
-         // but for now we just work on 1 device at a time
-diff --git a/ggml/src/ggml-metalium/metalium-pch.hpp b/ggml/src/ggml-metalium/metalium-pch.hpp
-index ba80f97..deb23ee 100644
---- a/ggml/src/ggml-metalium/metalium-pch.hpp
-+++ b/ggml/src/ggml-metalium/metalium-pch.hpp
-@@ -16,7 +16,7 @@
- #include "ttnn/tensor/storage.hpp"
- #include "ttnn/tensor/tensor.hpp"
- #include "ttnn/tensor/types.hpp"
--#include "types/arch.h"
-+#include "umd/device/types/arch.hpp"
- #include <algorithm>
- #include <array>
- #include <cstddef>
-@@ -40,7 +40,7 @@
- #include <ttnn/operations/normalization/rmsnorm/rmsnorm.hpp>
- #include <ttnn/operations/data_movement/untilize/untilize.hpp>
- #include <ttnn/operations/experimental/transformer/nlp_kv_cache_load_slice/nlp_kv_cache_load_slice.hpp>
--#include <ttnn/operations/creation.hpp>
-+#include <ttnn/operations/creation/creation.hpp>
- #include <ttnn/operations/eltwise/unary/unary_composite.hpp>
- #include <ttnn/operations/data_movement/transpose/transpose.hpp>
- #include <ttnn/operations/data_movement/permute/permute.hpp>
-@@ -48,7 +48,6 @@
- #include <ttnn/operations/data_movement/concat/concat.hpp>
- #include <ttnn/operations/copy/typecast/typecast.hpp>
- #include <ttnn/operations/normalization/softmax/softmax.hpp>
--#include <tt-metalium/persistent_kernel_cache.hpp>
- #include <ttnn/operations/data_movement/reshape_view/reshape.hpp>
- #include <ttnn/operations/reduction/generic/generic_reductions.hpp>
  
