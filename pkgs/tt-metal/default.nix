@@ -47,14 +47,15 @@ stdenv.mkDerivation (
   in
   {
     pname = "tt-metal";
-    version = "0.71.2";
+    version = "0.74.0";
 
     src = fetchFromGitHub {
       owner = "tenstorrent";
       repo = "tt-metal";
-      tag = "v${finalAttrs.version}";
+      # 0.74.0 final isn't cut yet; rc6 is the newest 0.74.
+      tag = "v${finalAttrs.version}-rc6";
       fetchSubmodules = true;
-      hash = "sha256-7gLL94vINP+AwUVgF6681MFtXhaQ08rKxyWlJ5IYubU=";
+      hash = "sha256-Mm11sjlO/KuOOJon6R3jf73XNHz4CmsxjmbDjrdHV8E=";
     };
 
     cpm = fetchurl {
@@ -74,8 +75,8 @@ stdenv.mkDerivation (
       ./header-only-local.patch
       # https://github.com/tenstorrent/tt-metal/pull/46229
       ./patched-pins-local.patch
-      # https://github.com/tenstorrent/tt-umd/pull/2187
-      ./umd-targets-local.patch
+      # tt-umd PR 2187 (./umd-targets-local.patch) merged upstream as of the umd
+      # submodule in tt-metal 0.74; dropped (patch now applies in reverse).
     ];
 
     postUnpack = ''
@@ -88,7 +89,17 @@ stdenv.mkDerivation (
       cp $cpm tt_metal/third_party/umd/cmake/CPM.cmake
       patchShebangs .
       substituteInPlace tt_metal/sfpi-info.sh --replace-fail "sfpi_dist=unknown" "sfpi_dist=debian"
-      substituteInPlace third_party/CMakeLists.txt --replace-fail "NAME googletest" "NAME GTest"
+      # Cap'n Proto's local-find-package.patch hunks don't apply to 0.74 (block
+      # reordered); do them here so CPM finds nixpkgs capnproto offline. (0.74
+      # already renames googletest -> GTest upstream, so that rewrite is dropped.)
+      substituteInPlace third_party/CMakeLists.txt --replace-fail "NAME capnproto" "NAME CapnProto"
+      sed -i 's|^        capnproto_pthread.patch$|&\n    FIND_PACKAGE_ARGUMENTS GLOBAL|' third_party/CMakeLists.txt
+
+      # Disable Tracy's profiler CLI tools + WASM viewer: they pull a GUI/web CPM
+      # stack (imgui/glfw/emsdk) and run `emsdk install` at configure. Only
+      # TracyClient is needed, and it's built earlier.
+      sed -i '/^add_subdirectory(tracy\/csvexport)$/i if(FALSE) # nix: profiler tools + WASM viewer disabled; TracyClient is built above' tt_metal/third_party/CMakeLists.txt
+      printf '\nendif()\n' >> tt_metal/third_party/CMakeLists.txt
     '';
 
     cmakeFlags = [
@@ -103,6 +114,9 @@ stdenv.mkDerivation (
       (lib.cmakeFeature "CAPNP_INCLUDE_DIRECTORY" "${lib.getDev capnproto}/include")
       (lib.cmakeFeature "reflect_SOURCE_DIR" (builtins.toString deps.reflect))
       (lib.cmakeFeature "simd-everywhere_SOURCE_DIR" "${simde}/include")
+      # ELFIO is fetched by tt-exalens's nested CPM, which ignores build/_deps;
+      # point CPM straight at the source.
+      (lib.cmakeFeature "CPM_ELFIO_SOURCE" (builtins.toString deps.elfio))
     ];
 
     preConfigure = ''
@@ -148,6 +162,15 @@ stdenv.mkDerivation (
     ];
 
     postInstall = ''
+      # The default install ships only a subset of ttnn C++ op headers; the
+      # Metalium backend includes many more via two forms (<ttnn/...> from
+      # $out/include and <ttnn/cpp/ttnn/...> from libexec). Install the full tree
+      # to both roots.
+      ( cd ../ttnn/cpp && find ttnn -name '*.hpp' -print0 | while IFS= read -r -d "" h; do
+          install -Dm444 "$h" "$out/include/$h"
+          install -Dm444 "$h" "$out/libexec/tt-metalium/ttnn/cpp/$h"
+        done )
+
       mkdir -p $out/${python3.sitePackages}
       cp -r ../ttnn/ttnn $out/${python3.sitePackages}/ttnn
       cp -r ../ttnn/tt_lib $out/${python3.sitePackages}/tt_lib

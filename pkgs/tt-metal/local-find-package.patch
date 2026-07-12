@@ -116,23 +116,6 @@ index 8ebd4d130a5..b5205466bda 100644
  )
  
  ####################################################################################################################
-@@ -458,7 +486,7 @@ set_target_properties(
- # Cap'n Proto : https://github.com/capnproto/capnproto
- ####################################################################################################################
- CPMAddPackage(
--    NAME capnproto
-+    NAME CapnProto
-     GITHUB_REPOSITORY capnproto/capnproto
-     GIT_TAG
-         d135c9ca5e15219eaf131dfce1a41afdbaea9aab # v1.2.0
-@@ -470,6 +498,7 @@ CPMAddPackage(
-     PATCHES
-         capnproto_capture_this.patch
-         capnproto_pthread.patch
-+    FIND_PACKAGE_ARGUMENTS GLOBAL
- )
- 
- ############################################################################################################################
 diff --git a/tt_metal/CMakeLists.txt b/tt_metal/CMakeLists.txt
 index e3e1d2f8e89..2fdebc5ed50 100644
 --- a/tt_metal/CMakeLists.txt
