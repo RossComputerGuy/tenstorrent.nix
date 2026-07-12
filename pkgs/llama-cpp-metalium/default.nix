@@ -36,11 +36,13 @@
         ggml/src/ggml-metalium/metalium-pch.hpp \
       --replace-fail '#include "types/arch.hpp"' '#include "umd/device/types/arch.hpp"'
 
-    # HEAD gates device open on Wormhole only; re-allow Blackhole.
     substituteInPlace ggml/src/ggml-metalium/ggml-metalium.cpp \
       --replace-fail \
         'GGML_ASSERT(device->arch() == tt::ARCH::WORMHOLE_B0);' \
-        'GGML_ASSERT(device->arch() == tt::ARCH::WORMHOLE_B0 || device->arch() == tt::ARCH::BLACKHOLE);'
+        'GGML_ASSERT(device->arch() == tt::ARCH::WORMHOLE_B0 || device->arch() == tt::ARCH::BLACKHOLE);' \
+      --replace-fail \
+        'if(arch == tt::ARCH::WORMHOLE_B0) {' \
+        'if(arch == tt::ARCH::WORMHOLE_B0 || arch == tt::ARCH::BLACKHOLE) {'
 
     # Strip a stray local build-tree prefix from a source include.
     substituteInPlace ggml/src/ggml-metalium/ggml-metalium.cpp \
