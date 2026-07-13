@@ -49,6 +49,15 @@
       --replace-fail \
         '#include "build_Release/include/tt-metalium/experimental/tensor/tensor_types.hpp"' \
         '#include "tt-metalium/experimental/tensor/tensor_types.hpp"'
+
+    # The mesh path hardcodes ETH command dispatch, but Blackhole's ethernet RISC
+    # can't fit the cq_dispatch/cq_prefetch kernels (idle_erisc code region overflow)
+    # and eth dispatch also drags in the harvested-eth-core path. Force Tensix
+    # (WORKER) dispatch for the mesh, matching the single-device path.
+    substituteInPlace ggml/src/ggml-metalium/ggml-metalium.cpp \
+      --replace-fail \
+        'trace_region_size, 2, tt::tt_metal::DispatchCoreType::ETH)' \
+        'trace_region_size, 2, tt::tt_metal::DispatchCoreType::WORKER)'
   '';
 
   npmRoot = null;
