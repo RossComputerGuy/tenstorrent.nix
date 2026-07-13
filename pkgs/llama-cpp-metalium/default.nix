@@ -60,16 +60,18 @@
         'trace_region_size, 2, tt::tt_metal::DispatchCoreType::WORKER)'
   '';
 
-  npmRoot = null;
-  npmDeps = null;
-  preConfigure = "";
+  npmDepsHash = "sha256-0dctM/apI3ysMIEVBaBXO9hZMWskpJpNpOws1gwiOYc=";
 
-  nativeBuildInputs =
-    builtins.filter (p: !(lib.hasInfix "npm" (p.name or ""))) (prevAttrs.nativeBuildInputs or [ ])
-    ++ [
-      python3
-      makeWrapper
-    ];
+  preConfigure = ''
+    pushd tools/ui
+    LLAMA_BUILD_NUMBER=0 npm run build
+    popd
+  '';
+
+  nativeBuildInputs = (prevAttrs.nativeBuildInputs or [ ]) ++ [
+    python3
+    makeWrapper
+  ];
 
   buildInputs = (prevAttrs.buildInputs or [ ]) ++ [
     tt-metal
