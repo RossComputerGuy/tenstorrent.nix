@@ -58,6 +58,19 @@
       --replace-fail \
         'trace_region_size, 2, tt::tt_metal::DispatchCoreType::ETH)' \
         'trace_region_size, 2, tt::tt_metal::DispatchCoreType::WORKER)'
+
+    # Finish the fork's half-done SDK port of the RoPE compute kernels. The teardown
+    # was already inlined (clear_addr_mod_base() -> TTI_SETC16(2, 0)) but the matching
+    # setup still called the removed math::set_addr_mod_base(), which does not compile
+    # against tt-metal 0.74 and aborted kernel jit at model warmup. Per tt-llk, that
+    # helper is exactly TTI_SETC16(2, 1) (bit 0 = use addr mods 4..7); Blackhole has no
+    # symbolic name so tt-llk itself uses the raw instruction, matching the teardown.
+    substituteInPlace \
+        ggml/src/ggml-metalium/kernels/rope_neox_compute.cpp \
+        ggml/src/ggml-metalium/kernels/rope_normal_compute.cpp \
+      --replace-fail \
+        'math::set_addr_mod_base(); // dst_reg[] addressing below uses addr mods 4..7; dropped in the new-SDK port' \
+        'TTI_SETC16(2, 1); // set addr mod base (use addr mods 4..7); inlined for BH, matches TTI_SETC16(2,0) teardown'
   '';
 
   npmDepsHash = "sha256-0dctM/apI3ysMIEVBaBXO9hZMWskpJpNpOws1gwiOYc=";
