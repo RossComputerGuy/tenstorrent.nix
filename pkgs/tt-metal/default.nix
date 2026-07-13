@@ -77,6 +77,10 @@ stdenv.mkDerivation (
       ./patched-pins-local.patch
       # tt-umd PR 2187 (./umd-targets-local.patch) merged upstream as of the umd
       # submodule in tt-metal 0.74; dropped (patch now applies in reverse).
+      # https://github.com/tenstorrent/tt-metal/issues/49701
+      # Drop harvested/nonexistent eth dispatch cores so a 4x p150a mesh can open
+      # (the eth dispatch YAML lists cores that don't exist on harvested Blackhole).
+      ./bh-eth-dispatch-harvesting.patch
     ];
 
     postUnpack = ''
