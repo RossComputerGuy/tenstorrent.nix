@@ -1,0 +1,97 @@
+--- a/ggml/src/ggml-metalium/ggml-metalium.cpp
++++ b/ggml/src/ggml-metalium/ggml-metalium.cpp
+@@ -58,6 +58,8 @@
+ #include <ttnn/operations/moreh/moreh_matmul/moreh_matmul.hpp>
+ #include <ttnn/operations/kv_cache/kv_cache.hpp>
+ #include <ttnn/operations/data_movement/slice/slice.hpp>
++#include <ttnn/operations/data_movement/pad/pad.hpp>
++#include <ttnn/operations/data_movement/repeat_interleave/repeat_interleave.hpp>
+ #include <ttnn/operations/normalization/layernorm/layernorm.hpp>
+ #include <ttnn/operations/normalization/rmsnorm/rmsnorm.hpp>
+ #include <ttnn/operations/data_movement/untilize/untilize.hpp>
+@@ -2549,6 +2551,21 @@
+         return false;
+     }
+ 
++    // Decode fast-path. A single query token attends the whole KV history; route it
++    // to ttnn scaled_dot_product_attention_decode, which handles a non-tile KV length
++    // and needs no mask tiling, unlike the prefill checks below. Test the op's own
++    // tensors in ggml FLASH_ATTN_EXT layout (dst [Dv, n_head, Nq, ne3], src0 q
++    // [Dk, Nq, n_head, ne3], src1 k [Dk, Nkv, n_head_kv, ne3]) rather than the
++    // permute-unwound q/k/v above, whose axes are reordered. Require single batch,
++    // no attention sink, tile-aligned head dims, and GQA head divisibility.
++    if(dst->ne[2] == 1
++        && dst->src[0]->ne[3] == 1 && dst->src[1]->ne[3] == 1 && dst->src[2]->ne[3] == 1
++        && dst->src[4] == nullptr
++        && dst->src[0]->ne[0] % 32 == 0 && dst->src[2]->ne[0] % 32 == 0
++        && dst->src[0]->ne[2] % dst->src[1]->ne[2] == 0) {
++        return true;
++    }
++
+     // Examoke input
+     // REJECT op FLASH_ATTN_EXT (__fattn__-6)
+     //   src0 shape [64 32 32 1], dtype = f32, name = 'Qcur-6 (view) (permuted)'
+@@ -2661,6 +2678,63 @@
+ 
+     const uint32_t Sq = qt.logical_shape()[2];
+ 
++    // Decode: a single query token (dst is [Dv, n_head, Nq=1, ne3]) attends the whole
++    // KV history. ttnn sdpa_decode produced wrong output here for reasons we could not
++    // isolate from source (all its inputs/params were verified against tt-metal's own
++    // passing test), so run attention by hand with matmul + softmax, the ops that give
++    // coherent output on this device. realize_ggml_view returns reversed-ggml order:
++    // Q as [1, Nq=1, n_head, Dk] and K/V as [1, n_head_kv, Nkv, Dk]. The K view spans
++    // exactly the valid [0, n_kv) positions, so a single query attends all of them with
++    // no causal mask needed.
++    if(dst->ne[2] == 1) {
++        auto kd = *realize_ggml_view(dst->src[1]);     // [1, n_head_kv, Nkv, Dk]
++        auto vd = *realize_ggml_view(dst->src[2]);     // [1, n_head_kv, Nkv, Dv]
++        // GQA: broadcast KV heads up to the Q head count, each KV head repeated
++        // contiguously so query head h maps to KV head h/(n_head/n_head_kv), matching
++        // ggml's grouping. matmul needs the head (batch) dims of Q and K/V to match.
++        const uint32_t n_head_q = qt.logical_shape()[2];
++        const uint32_t n_head_kv = kd.logical_shape()[1];
++        if(n_head_kv != 0 && n_head_q != n_head_kv && n_head_q % n_head_kv == 0) {
++            const uint32_t reps = n_head_q / n_head_kv;
++            kd = ttnn::repeat_interleave(kd, reps, 1);  // [1, n_head, Nkv, Dk]
++            vd = ttnn::repeat_interleave(vd, reps, 1);  // [1, n_head, Nkv, Dv]
++        }
++        auto kcfg = make_compute_kernel_config(qt.device());
++        // Q: [1, Nq=1, n_head, Dk] -> [1, n_head, Nq=1, Dk]
++        auto q4 = ttnn::transpose(qt, 1, 2);
++        // scores = (Q @ K^T) * scale : [1, n_head, 1, Nkv]
++        auto scores = ttnn::operations::matmul::matmul(
++            q4, kd, /*transpose_a=*/false, /*transpose_b=*/true,
++            std::nullopt, std::nullopt, std::nullopt, std::nullopt, kcfg);
++        scores = ttnn::multiply(scores, scale);
++        // The K/V view spans a reserved block (Nkv is padded far past the real sequence
++        // length); the not-yet-written slots are invalid and marked -inf in the ggml KQ
++        // mask (src[3]). Add it so softmax ignores them (this is the causal/validity mask
++        // ggml would apply). Realized mask is [1, 1, Nq_pad, Nkv]; take the single real
++        // query row and broadcast-add over the heads.
++        if(dst->src[3]) {
++            auto m = *realize_ggml_view(dst->src[3]);
++            const auto ms = m.logical_shape();
++            if((uint32_t)ms[2] != 1) {
++                m = ggml_metalium_narrow_single_dim_or_slice(m,
++                    ttsl::SmallVector<uint32_t>{0u, 0u, 0u, 0u},
++                    ttsl::SmallVector<uint32_t>{(uint32_t)ms[0], (uint32_t)ms[1], 1u, (uint32_t)ms[3]},
++                    ttsl::SmallVector<uint32_t>{1u, 1u, 1u, 1u});
++            }
++            scores = ttnn::add(scores, m);
++        }
++        auto probs = ttnn::softmax(scores, 3);
++        // out = probs @ V : [1, n_head, 1, Dv]
++        auto out = ttnn::operations::matmul::matmul(
++            probs, vd, /*transpose_a=*/false, /*transpose_b=*/false,
++            std::nullopt, std::nullopt, std::nullopt, std::nullopt, kcfg);
++        // ggml's FLASH_ATTN output is the permuted ttnn[ne3, Nq=1, n_head, Dv]; swap
++        // the n_head and Nq axes of [1, n_head, 1, Dv] to match.
++        out = ttnn::transpose(out, 1, 2);
++        ggml_metalium_store_tensor(dst_meta, std::move(out));
++        return;
++    }
++
+     std::optional<ttnn::Tensor> mask_tensor;
+     if(mask) {
+         auto mt = *realize_ggml_view(mask);

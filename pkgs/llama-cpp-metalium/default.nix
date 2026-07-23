@@ -26,7 +26,13 @@
     hash = "sha256-zUzUb3VJsSOiBM2Zapg0VxV43oABzx3Y9Ez7hivqebE=";
   };
 
-  patches = (prevAttrs.patches or [ ]) ++ [ ./metalium-find-package.patch ];
+  patches = (prevAttrs.patches or [ ]) ++ [
+    ./metalium-find-package.patch
+    # Route single-token decode attention through ttnn's
+    # scaled_dot_product_attention_decode instead of rejecting it, so generation
+    # keeps the KV cache read on device instead of falling back to CPU every token.
+    ./flash-attn-decode.patch
+  ];
 
   postPatch = (prevAttrs.postPatch or "") + ''
     # Redirect the bare "types/arch.hpp" include to the namespaced form; only the
@@ -71,6 +77,33 @@
       --replace-fail \
         'math::set_addr_mod_base(); // dst_reg[] addressing below uses addr mods 4..7; dropped in the new-SDK port' \
         'TTI_SETC16(2, 1); // set addr mod base (use addr mods 4..7); inlined for BH, matches TTI_SETC16(2,0) teardown'
+
+    # llama builds the KV cache SET_ROWS index tensors (k_idxs / v_idxs) as I64, but
+    # ggml_set_rows also accepts I32 and the Metalium backend only maps integer tensors
+    # as I32 (uploaded untiled as UINT32). I64 maps to INVALID, so supports_op rejects
+    # the KV cache SET_ROWS and ggml aborts because that cache tensor is pinned to the
+    # device buffer. Emit I32 indices instead. The values are KV slot offsets, well
+    # within 31 bits for realistic context sizes, and I32 is valid on the CPU fallback.
+    substituteInPlace src/llama-kv-cache.cpp \
+      --replace-fail \
+        'ggml_tensor * k_idxs = ggml_new_tensor_1d(ctx, GGML_TYPE_I64, n_tokens);' \
+        'ggml_tensor * k_idxs = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, n_tokens);' \
+      --replace-fail \
+        'v_idxs = ggml_new_tensor_1d(ctx, GGML_TYPE_I64, n_tokens);' \
+        'v_idxs = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, n_tokens);' \
+      --replace-fail \
+        'v_idxs = ggml_new_tensor_1d(ctx, GGML_TYPE_I64, n_tokens*hparams.n_embd_v_gqa_max());' \
+        'v_idxs = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, n_tokens*hparams.n_embd_v_gqa_max());' \
+      --replace-fail \
+        'int64_t * data = (int64_t *) dst->data;' \
+        'int32_t * data = (int32_t *) dst->data;'
+
+    # Drop a leftover debug print in the set_rows path. It fires on every K/V cache
+    # write (per layer, per token), flooding stderr and flushing on every call.
+    substituteInPlace ggml/src/ggml-metalium/ggml-metalium.cpp \
+      --replace-fail \
+        'fmt::println("res: {}", res.logical_shape());' \
+        ""
   '';
 
   npmDepsHash = "sha256-0dctM/apI3ysMIEVBaBXO9hZMWskpJpNpOws1gwiOYc=";
@@ -137,7 +170,8 @@
           wrapProgram "$exe" \
             --set-default HOME "/tmp" \
             --set-default TT_METAL_HOME "${ttRoot}" \
-            --set-default TT_METAL_RUNTIME_ROOT "${ttRoot}"
+            --set-default TT_METAL_RUNTIME_ROOT "${ttRoot}" \
+            --set-default GGML_METALIUM_EXPERIMENTAL_OPS "1"
         fi
       done
     '';
