@@ -28,6 +28,15 @@ final: prev: {
       tt-tools-common = pyfinal.callPackage ./pkgs/tt-tools-common { };
       vllm-tt = pyfinal.callPackage ./pkgs/vllm-tt { };
       vllm-tt-plugin = pyfinal.callPackage ./pkgs/vllm-tt-plugin { };
+
+      # This vLLM dependency pins starlette<1.0.0, but newer nixpkgs ship starlette
+      # 1.x. The cap is conservative (it works on 1.x), so relax it rather than let
+      # the runtime-deps check fail the whole vLLM closure.
+      prometheus-fastapi-instrumentator =
+        pyprev.prometheus-fastapi-instrumentator.overridePythonAttrs
+          (old: {
+            pythonRelaxDeps = (old.pythonRelaxDeps or [ ]) ++ [ "starlette" ];
+          });
     })
   ];
 
