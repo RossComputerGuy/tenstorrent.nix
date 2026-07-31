@@ -97,13 +97,6 @@
       --replace-fail \
         'int64_t * data = (int64_t *) dst->data;' \
         'int32_t * data = (int32_t *) dst->data;'
-
-    # Drop a leftover debug print in the set_rows path. It fires on every K/V cache
-    # write (per layer, per token), flooding stderr and flushing on every call.
-    substituteInPlace ggml/src/ggml-metalium/ggml-metalium.cpp \
-      --replace-fail \
-        'fmt::println("res: {}", res.logical_shape());' \
-        ""
   '';
 
   npmDepsHash = "sha256-0dctM/apI3ysMIEVBaBXO9hZMWskpJpNpOws1gwiOYc=";
@@ -171,7 +164,8 @@
             --set-default HOME "/tmp" \
             --set-default TT_METAL_HOME "${ttRoot}" \
             --set-default TT_METAL_RUNTIME_ROOT "${ttRoot}" \
-            --set-default GGML_METALIUM_EXPERIMENTAL_OPS "1"
+            --set-default GGML_METALIUM_EXPERIMENTAL_OPS "1" \
+            --set-default GGML_METALIUM_TRACE "1"
         fi
       done
     '';

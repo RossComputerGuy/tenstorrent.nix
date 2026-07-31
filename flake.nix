@@ -47,11 +47,14 @@
               tt-system-tools
               tt-topology
               tt-umd
+              tt-vllm-server
               ;
             inherit (pkgs.python3Packages)
               pyluwen
               tt-flash
               tt-tools-common
+              vllm-tt
+              vllm-tt-plugin
               ;
             inherit (pkgs.linuxPackagesFor pkgs.linux) tt-kmd;
           };

@@ -13,6 +13,9 @@ final: prev: {
   tt-burnin = final.callPackage ./pkgs/tt-burnin { };
   tt-logger = final.callPackage ./pkgs/tt-logger { };
   tt-metal = final.callPackage ./pkgs/tt-metal { };
+  tt-vllm-server = final.callPackage ./pkgs/tt-vllm-server { };
+  tt-studio-frontend = final.callPackage ./pkgs/tt-studio-frontend { };
+  tt-studio-backend = final.callPackage ./pkgs/tt-studio-backend { };
   tt-smi = final.callPackage ./pkgs/tt-smi { };
   tt-system-tools = final.callPackage ./pkgs/tt-system-tools { };
   tt-topology = final.callPackage ./pkgs/tt-topology { };
@@ -23,6 +26,8 @@ final: prev: {
       pyluwen = pyfinal.callPackage ./pkgs/pyluwen { };
       tt-flash = pyfinal.callPackage ./pkgs/tt-flash { };
       tt-tools-common = pyfinal.callPackage ./pkgs/tt-tools-common { };
+      vllm-tt = pyfinal.callPackage ./pkgs/vllm-tt { };
+      vllm-tt-plugin = pyfinal.callPackage ./pkgs/vllm-tt-plugin { };
     })
   ];
 

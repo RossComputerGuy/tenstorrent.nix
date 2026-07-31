@@ -47,15 +47,14 @@ stdenv.mkDerivation (
   in
   {
     pname = "tt-metal";
-    version = "0.74.0";
+    version = "0.75.0";
 
     src = fetchFromGitHub {
       owner = "tenstorrent";
       repo = "tt-metal";
-      # 0.74.0 final isn't cut yet; rc6 is the newest 0.74.
-      tag = "v${finalAttrs.version}-rc6";
+      tag = "v${finalAttrs.version}";
       fetchSubmodules = true;
-      hash = "sha256-Mm11sjlO/KuOOJon6R3jf73XNHz4CmsxjmbDjrdHV8E=";
+      hash = "sha256-FCYdokW0yAKOGQueNGA+BNqSZDvbT8mRIpn3ZXSMT9Q=";
     };
 
     cpm = fetchurl {
@@ -66,13 +65,11 @@ stdenv.mkDerivation (
     sfpi = callPackage ./sfpi.nix { };
 
     patches = [
-      # https://github.com/tenstorrent/tt-metal/pull/46222
-      ./cadical-local.patch
+      # ./cadical-local.patch  # PR #46222 merged upstream in 0.75 (applies in reverse)
       ./umd-asio-local.patch
       # https://github.com/tenstorrent/tt-metal/pull/46224
       ./local-find-package.patch
-      # https://github.com/tenstorrent/tt-metal/pull/46226
-      ./header-only-local.patch
+      # ./header-only-local.patch  # PR #46226 merged upstream in 0.75 (applies in reverse)
       # https://github.com/tenstorrent/tt-metal/pull/46229
       ./patched-pins-local.patch
       # tt-umd PR 2187 (./umd-targets-local.patch) merged upstream as of the umd
@@ -101,9 +98,23 @@ stdenv.mkDerivation (
 
       # Disable Tracy's profiler CLI tools + WASM viewer: they pull a GUI/web CPM
       # stack (imgui/glfw/emsdk) and run `emsdk install` at configure. Only
-      # TracyClient is needed, and it's built earlier.
+      # TracyClient is needed, and it's built earlier. Wrap csvexport..WASM in
+      # if(FALSE), then close it BEFORE the tracy_debug_categories header
+      # generation (new in 0.75) so that header is still emitted -- otherwise
+      # the compile fails on missing tracy_debug_categories_generated.hpp.
       sed -i '/^add_subdirectory(tracy\/csvexport)$/i if(FALSE) # nix: profiler tools + WASM viewer disabled; TracyClient is built above' tt_metal/third_party/CMakeLists.txt
-      printf '\nendif()\n' >> tt_metal/third_party/CMakeLists.txt
+      sed -i '/^set(_tt_tracy_categories_file /i endif() # nix: end tracy tools/WASM disable; keep the debug-categories header generation below' tt_metal/third_party/CMakeLists.txt
+
+      # The tracy python helper (imported unconditionally by `import ttnn`) does an
+      # mkdir of a profiler wasm-trace dir under TT_METAL_HOME at import time. That
+      # path lives in the read-only nix store, so the import aborts. Make the mkdir
+      # tolerant of a read-only store; profiling still works when TT_METAL_HOME is a
+      # writable runtime directory.
+      substituteInPlace tools/tracy/common.py \
+        --replace-fail 'PROFILER_WASM_TRACES_DIR.mkdir(parents=True, exist_ok=True)' 'try:
+    PROFILER_WASM_TRACES_DIR.mkdir(parents=True, exist_ok=True)
+except OSError:
+    pass'
     '';
 
     cmakeFlags = [
@@ -175,11 +186,40 @@ stdenv.mkDerivation (
           install -Dm444 "$h" "$out/libexec/tt-metalium/ttnn/cpp/$h"
         done )
 
+      # ttnn operation kernels (the dataflow/compute sources under any kernels/
+      # directory) are JIT-compiled at runtime and resolved by relative path, but
+      # TT_INSTALL omits them. Without them ops such as
+      # scaled_dot_product_attention abort at model warmup with
+      # "Kernel file ttnn/cpp/ttnn/operations/.../reader_interleaved.cpp doesn't
+      # exist in any of the searched paths". Ship every file under a ttnn kernels/
+      # directory into the libexec ttnn/cpp tree where tt-metal searches.
+      ( cd ../ttnn/cpp && find ttnn -path '*/kernels/*' -type f -print0 | while IFS= read -r -d "" k; do
+          install -Dm444 "$k" "$out/libexec/tt-metalium/ttnn/cpp/$k"
+        done )
+
+      # TT_INSTALL omits several new-in-0.75 compute-kernel API headers under
+      # tt_metal/hw/inc/api/compute (e.g. eltwise_unary/lerp.h, snake_beta.h). JIT-compiling any
+      # kernel that includes them -- notably the ternary `where` kernel (ternary_sfpu_no_bcast_ttt)
+      # -- then fails at runtime with "fatal error: api/compute/eltwise_unary/lerp.h: No such file".
+      # Copy the full compute-API tree into the installed hw/inc so every JIT include resolves.
+      cp -r --no-preserve=ownership,mode ../tt_metal/hw/inc/api/compute/. \
+        $out/libexec/tt-metalium/tt_metal/hw/inc/api/compute/
+
       mkdir -p $out/${python3.sitePackages}
       cp -r ../ttnn/ttnn $out/${python3.sitePackages}/ttnn
       cp -r ../ttnn/tt_lib $out/${python3.sitePackages}/tt_lib
       cp -r ../tools/tracy $out/${python3.sitePackages}/tracy
       cp $out/lib/_ttnn.so $out/${python3.sitePackages}/ttnn/_ttnn.so
+
+      # The Tenstorrent model library (models.tt_transformers etc.) is not part of
+      # the default install, but the vLLM TT plugin loads Llama and friends from it
+      # at runtime (models.tt_transformers.tt.generator_vllm). Ship the whole tree so
+      # `import models.*` resolves as a namespace package on the python path.
+      cp -r ../models $out/${python3.sitePackages}/models
+      # Some model demo tests symlink into the repo `tests/` tree, which is not
+      # shipped, leaving dangling symlinks that trip the broken-symlink check.
+      # Drop them; they are test fixtures, not needed to load a model.
+      find $out/${python3.sitePackages}/models -xtype l -delete
 
       mkdir -p $out/${python3.sitePackages}/ttnn-${finalAttrs.version}.dist-info
       cat > $out/${python3.sitePackages}/ttnn-${finalAttrs.version}.dist-info/METADATA <<EOF

@@ -1,15 +1,151 @@
 --- a/ggml/src/ggml-metalium/ggml-metalium.cpp
 +++ b/ggml/src/ggml-metalium/ggml-metalium.cpp
-@@ -58,6 +58,8 @@
+@@ -58,6 +58,9 @@
  #include <ttnn/operations/moreh/moreh_matmul/moreh_matmul.hpp>
  #include <ttnn/operations/kv_cache/kv_cache.hpp>
  #include <ttnn/operations/data_movement/slice/slice.hpp>
 +#include <ttnn/operations/data_movement/pad/pad.hpp>
 +#include <ttnn/operations/data_movement/repeat_interleave/repeat_interleave.hpp>
++#include <ttnn/operations/data_movement/scatter/scatter.hpp>
  #include <ttnn/operations/normalization/layernorm/layernorm.hpp>
  #include <ttnn/operations/normalization/rmsnorm/rmsnorm.hpp>
  #include <ttnn/operations/data_movement/untilize/untilize.hpp>
-@@ -2549,6 +2551,21 @@
+@@ -79,6 +82,8 @@
+ #include <ttnn/cpp/ttnn/operations/data_movement/gather/tosa/gather_tosa.hpp>
+ #include <ttnn/cpp/ttnn/operations/data_movement/scatter/tosa_scatter.hpp>
+ #include <ttnn/cpp/ttnn/operations/transformer/sdpa_decode/sdpa_decode.hpp>
++#include <ttnn/operations/embedding/embedding.hpp>
++#include <ttnn/operations/core/to_layout/to_layout_op.hpp>
+ #include <ttnn/cpp/ttnn/operations/transformer/sdpa/sdpa.hpp>
+ #include <ttnn/cpp/ttnn/operations/data_movement/slice/slice.hpp>
+ #include <ttnn/operations/experimental/slice_write/slice_write.hpp>
+@@ -609,12 +614,19 @@
+ 
+     // Tilize to ROW_MAJOR doesn't mean the tensor is contiguous. It produces tensors that has 0 padded up to the nearest
+     // 32 elements on last two (for GGML first two) dimentions.
+-    // Compute the stride for each dimension
++    // Compute the stride for each dimension.
++    // The stride basis depends on how the host buffer was laid out: tt-metal 0.74's
++    // untilize().cpu() returned a tile-PADDED row-major buffer (strides from padded_shape), but
++    // 0.75 returns a LOGICAL contiguous buffer (buf_size == product(logical_shape)). Pick the basis
++    // that matches the ACTUAL buffer size, else src_idx runs past buf_size (GGML_ASSERT below).
++    size_t padded_elems = 1;
++    for(size_t i = 0; i < padded_shape.size(); i++) padded_elems *= (size_t)padded_shape[i];
++    const ttnn::Shape& stride_basis = (buf_size == padded_elems) ? padded_shape : shape;
+     std::array<size_t, 4> stride = {1, 1, 1, 1};
+     size_t cumulative_stride = 1;
+-    for(int i = padded_shape.size() - 1; i >= 0; i--) {
++    for(int i = stride_basis.size() - 1; i >= 0; i--) {
+         stride[i] = cumulative_stride;
+-        cumulative_stride *= padded_shape[i];
++        cumulative_stride *= stride_basis[i];
+     }
+ 
+     // Convert TT shape to GGML shape
+@@ -1765,6 +1777,12 @@
+     return false;
+ }
+ 
++// Cache of identity[seq,seq] matrices used to build the one-hot KV-write mask, keyed by seq.
++// File-scope (not a function-local static) so it can be released in ggml_backend_metalium_free
++// while the device is still alive. A function-local static holding device tensors is destroyed at
++// process exit AFTER the mesh is torn down, which segfaults in Tensor::deallocate_impl.
++static std::unordered_map<uint32_t, ttnn::Tensor> g_setrows_id_cache;
++
+ static void ggml_backend_metalium_set_rows(ggml_backend_metalium_context * ctx, struct ggml_tensor * dst)
+ {
+     GGML_UNUSED(ctx);
+@@ -1789,15 +1807,80 @@
+     else {
+         ggml_tensor_extra_metalium* idx_meta = (ggml_tensor_extra_metalium*)idxs->extra;
+         GGML_ASSERT(idx_meta != nullptr);
+-        // The operation wants 3D tensor but we have 4D, op also wants index be 2d
+-        auto src3d = src->reshape(src->logical_shape().to_rank(3));
+-        auto idx2d = idx_meta->tensor->reshape(idx_meta->tensor->logical_shape().to_rank(2));
+-        auto real_dst3d = real_dst->reshape(real_dst->logical_shape().to_rank(3));
+-        ttnn::Tensor res = ttnn::tosa_scatter(real_dst3d, ttnn::tilize_with_zero_padding(idx2d), src3d, std::nullopt);
+-        fmt::println("res: {}", res.logical_shape());
+-        res = res.reshape(res.logical_shape().to_rank(4));
+-        ggml_metalium_store_tensor(dst_meta, res);
+-        ggml_metalium_store_tensor(real_dst_meta, res);
++        // The operation wants 3D tensors, and the index be 2d
++        auto src3d = src->reshape(src->logical_shape().to_rank(3));                             // [1, W, C]
++        auto idx2d = idx_meta->tensor->reshape(idx_meta->tensor->logical_shape().to_rank(2));   // [1, W]
++        auto real_dst3d = real_dst->reshape(real_dst->logical_shape().to_rank(3));              // [1, seq, C]
++        const uint32_t W   = src3d.logical_shape()[1];
++        const uint32_t seq = real_dst3d.logical_shape()[1];
++        auto dev = real_dst3d.device();
++        // Write the new rows into the cache FULLY ON-DEVICE (no host read, so the graph is
++        // trace-capturable). tosa_scatter host-reads the whole cache each call (blocks trace).
++        // Build a one-hot mask M[1,W,seq] where M[0,w,:] = onehot(idx[w]) by EMBEDDING: gather
++        // rows of an identity[seq,seq] matrix indexed by the index tensor. embedding handles the
++        // W axis natively (as a gather), which sidesteps the tile-padding corruption that broke
++        // every broadcast / compare / concat / repeat approach on the small W dimension (W<32
++        // lives in a 32-wide tile and the second row/col never populated). Then blend:
++        // new_cache = cache*(1 - rowsum(M)) + M^T @ src. Masks are exactly 0/1 so bf16 is lossless.
++        // identity[seq,seq] is built ONCE on host during the non-traced warmup (a host upload
++        // outside capture is fine) and cached; seq is fixed per run.
++        auto iit = g_setrows_id_cache.find(seq);
++        if(iit == g_setrows_id_cache.end()) {
++            std::vector<float> idbuf((size_t)seq * seq, 0.0f);
++            for(uint32_t i = 0; i < seq; i++) idbuf[(size_t)i * seq + i] = 1.0f;
++            auto hb = host_data_to_tt_host_buffer<float, bfloat16>(idbuf.data(), (size_t)seq * seq);
++            tt::tt_metal::Tensor idm(std::move(hb), ttnn::Shape({seq, seq}),
++                tt::tt_metal::DataType::BFLOAT16, tt::tt_metal::Layout::ROW_MAJOR);
++            idm = idm.to_device(dev);
++            iit = g_setrows_id_cache.emplace(seq, idm).first;
++        }
++        const ttnn::Tensor& identity = iit->second;                                        // [seq, seq] bf16
++        // embedding wants uint32 ROW_MAJOR indices; the gather yields M[1,W,seq] one-hot rows.
++        auto idx_rm = ttnn::to_layout(idx2d, ttnn::ROW_MAJOR_LAYOUT);                       // [1, W] uint32
++        auto Mb = ttnn::embedding(idx_rm, identity, std::nullopt, ttnn::TILE_LAYOUT);       // [1, W, seq] bf16 TILE
++        // EXACT blend, no per-row scalar. written = M^T @ src is an exact one-hot gather (bf16 is
++        // exact for 0/1 masks): each new row lands at its position, 0 elsewhere. To preserve the
++        // untouched cache rows we need a 0/1 gate, but any [1,seq,1] scalar corrupts index-1, so
++        // build it at FULL C width: anyWrittenC = M^T @ ones[1,W,C] marks written rows (1) vs not
++        // (0) across every channel. res = cache*(1 - anyWrittenC) + written. Every tensor keeps
++        // the large C last dim, and the gate is exactly 0/1, so written rows equal src EXACTLY
++        // (no delta rounding, which was drifting the KV over autoregressive steps).
++        auto written = ttnn::operations::matmul::matmul(
++            Mb, src3d, /*transpose_a=*/true, /*transpose_b=*/false,
++            std::nullopt, std::nullopt, std::nullopt, std::nullopt, make_compute_kernel_config(dev));  // [1, seq, C]
++        auto onesWC = ttnn::add(ttnn::multiply(src3d, 0.0f), 1.0f);                           // [1, W, C] ones
++        auto anyWrittenC = ttnn::operations::matmul::matmul(
++            Mb, onesWC, /*transpose_a=*/true, /*transpose_b=*/false,
++            std::nullopt, std::nullopt, std::nullopt, std::nullopt, make_compute_kernel_config(dev)); // [1, seq, C]
++        auto keepC = ttnn::add(ttnn::multiply(anyWrittenC, -1.0f), 1.0f);                     // [1, seq, C] (1=keep)
++        // Binary blend (trace-stable). ttnn::where fuses this 5->3 but is a net wash: it needs the
++        // 0.75 header fix to JIT, is perf-neutral end-to-end (decode is host-bound not device-bound),
++        // AND is trace-fragile ("Event Synchronization not supported during trace capture" when its
++        // kernel compiles mid-capture). So keep the explicit binary blend.
++        auto res4 = ttnn::add(ttnn::multiply(real_dst3d, keepC), written);                    // [1, seq, C]
++        ttnn::Tensor res = res4.reshape(res4.logical_shape().to_rank(4));
++        // Persist res INTO the existing (pinned) cache buffers IN PLACE, even during trace capture.
++        // The generic store swaps in a NEW tensor while capturing (its in-place path is gated on
++        // !g_metalium_trace_capturing), so the trace records writes to a throwaway buffer and the
++        // KV cache never accumulates on replay -- coherent with trace OFF, garbled with trace ON.
++        // A device->device copy (allowed during capture, unlike a host upload) keeps the stable
++        // address the trace baked, so replay writes the new row into the real cache each token.
++        auto persist_inplace = [](ggml_tensor_extra_metalium* meta, const tt::tt_metal::Tensor& v) {
++            meta->row_folded.reset();
++            const auto& cur = meta->tensor;
++            if(cur != nullptr
++                && cur->storage_type()  == tt::tt_metal::StorageType::DEVICE
++                && v.storage_type()     == tt::tt_metal::StorageType::DEVICE
++                && cur->dtype()         == v.dtype()
++                && cur->layout()        == v.layout()
++                && cur->logical_shape() == v.logical_shape()) {
++                ttnn::copy(v, *cur);
++            } else {
++                meta->tensor = std::make_shared<tt::tt_metal::Tensor>(v);
++            }
++        };
++        persist_inplace(real_dst_meta, res);
++        persist_inplace(dst_meta, res);
+     }
+ }
+ 
+@@ -2549,6 +2632,21 @@
          return false;
      }
  
@@ -31,7 +167,7 @@
      // Examoke input
      // REJECT op FLASH_ATTN_EXT (__fattn__-6)
      //   src0 shape [64 32 32 1], dtype = f32, name = 'Qcur-6 (view) (permuted)'
-@@ -2661,6 +2678,63 @@
+@@ -2661,6 +2759,63 @@
  
      const uint32_t Sq = qt.logical_shape()[2];
  
@@ -95,3 +231,61 @@
      std::optional<ttnn::Tensor> mask_tensor;
      if(mask) {
          auto mt = *realize_ggml_view(mask);
+@@ -2714,6 +2869,10 @@
+     if(ctx->device != nullptr && ctx->runtime != nullptr) {
+         metalium_trace_release_all(ctx->device->get_mesh_device().get(), ctx->runtime);
+     }
++    // Release the cached KV-write identity matrices while the mesh is still alive (same reason as
++    // the trace release above): their Tensor destructors free device memory, which faults if run
++    // during static teardown after the device is gone.
++    g_setrows_id_cache.clear();
+     metalium_backend_runtime_free(ctx->runtime);
+     delete ctx;
+     delete backend;
+@@ -2983,8 +3142,19 @@
+             return;
+         }
+     }
+-    GGML_ASSERT(size == ggml_nbytes(tensor));
+-    GGML_UNUSED(offset);
++    // Support PARTIAL reads (offset/size smaller than the whole tensor). llama-server does these
++    // for prompt-cache and slot save/restore; the backend previously only allowed whole-tensor
++    // reads and aborted here. The convert-to-host path below fills the entire tensor at once, so
++    // for a sub-range read the whole tensor into a temp buffer and copy out [offset, offset+size).
++    const size_t gt_full_bytes = ggml_nbytes(tensor);
++    const bool   gt_partial    = (offset != 0) || (size != gt_full_bytes);
++    GGML_ASSERT(offset + size <= gt_full_bytes && "get_tensor range out of bounds");
++    std::vector<uint8_t> gt_tmp;
++    void* gt_target = data;
++    if(gt_partial) {
++        gt_tmp.resize(gt_full_bytes);
++        gt_target = gt_tmp.data();
++    }
+ 
+     // ggml_backend_metalium_buffer_context * ctx = (ggml_backend_metalium_buffer_context *)buffer->context;
+ 
+@@ -3043,18 +3213,21 @@
+     GGML_ASSERT(dst_ggtype != GGML_TYPE_F64 && dst_ggtype != GGML_TYPE_I16 && dst_ggtype != GGML_TYPE_I8);
+     switch(t->dtype()) {
+         case tt::tt_metal::DataType::BFLOAT16:
+-            copy_tt_tensor_to_host_pointer<bfloat16>(*t, (float*)data, dst_ggtype);
++            copy_tt_tensor_to_host_pointer<bfloat16>(*t, (float*)gt_target, dst_ggtype);
+             break;
+         case tt::tt_metal::DataType::FLOAT32:
+-            copy_tt_tensor_to_host_pointer<float>(*t, (float*)data, dst_ggtype);
++            copy_tt_tensor_to_host_pointer<float>(*t, (float*)gt_target, dst_ggtype);
+             break;
+         case tt::tt_metal::DataType::UINT32:
+-            copy_tt_tensor_to_host_pointer<uint32_t>(*t, (int*)data, dst_ggtype);
++            copy_tt_tensor_to_host_pointer<uint32_t>(*t, (int*)gt_target, dst_ggtype);
+             break;
+         default:
+             GGML_ASSERT(false && "Unsupported data type in TT tensor when converting to GGML tensor");
+             break;
+     }
++    if(gt_partial) {
++        memcpy(data, gt_tmp.data() + offset, size);
++    }
+ }
+ 
+ static void * ggml_backend_metalium_buffer_get_base(ggml_backend_buffer_t buffer) {
