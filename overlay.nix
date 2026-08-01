@@ -37,6 +37,23 @@ final: prev: {
           (old: {
             pythonRelaxDeps = (old.pythonRelaxDeps or [ ]) ++ [ "starlette" ];
           });
+
+      # The Tenstorrent vLLM fork imports `ReasoningEffort` from mistral-common,
+      # which older nixpkgs pins lack. Bump to 1.11.2 (which has it) so the fork
+      # loads regardless of the host nixpkgs' mistral-common version.
+      mistral-common = pyprev.mistral-common.overridePythonAttrs (old: {
+        version = "1.11.2";
+        src = final.fetchFromGitHub {
+          owner = "mistralai";
+          repo = "mistral-common";
+          tag = "v1.11.2";
+          hash = "sha256-EXdZcBR61GNye8LqwIqRO8lP1lK6fqPJufWFO9XkkYQ=";
+        };
+        # The bumped source keeps the older derivation's check inputs, and 1.11.2's
+        # test suite pulls in llguidance which is not available here. We only need
+        # the library to import, not its tests.
+        doCheck = false;
+      });
     })
   ];
 
