@@ -58,10 +58,11 @@ buildPythonPackage {
 
   # Reuse the resolved python dependency closure from nixpkgs' vLLM (same 0.16.0
   # base) instead of re-deriving it. The CPU variant drops the CUDA-only extras.
-  dependencies = (vllm.override {
-    cudaSupport = false;
-    rocmSupport = false;
-  }).dependencies;
+  dependencies =
+    (vllm.override {
+      cudaSupport = false;
+      rocmSupport = false;
+    }).dependencies;
 
   # vLLM pins exact versions that do not all match nixpkgs; the fork is tested
   # against a nearby set and the tt path does not exercise the drift.

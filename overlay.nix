@@ -14,6 +14,7 @@ final: prev: {
   tt-logger = final.callPackage ./pkgs/tt-logger { };
   tt-metal = final.callPackage ./pkgs/tt-metal { };
   tt-vllm-server = final.callPackage ./pkgs/tt-vllm-server { };
+  tt-media-server = final.callPackage ./pkgs/tt-media-server { };
   tt-studio-frontend = final.callPackage ./pkgs/tt-studio-frontend { };
   tt-studio-backend = final.callPackage ./pkgs/tt-studio-backend { };
   tt-smi = final.callPackage ./pkgs/tt-smi { };
@@ -24,6 +25,7 @@ final: prev: {
   pythonPackagesExtensions = prev.pythonPackagesExtensions ++ [
     (pyfinal: pyprev: {
       pyluwen = pyfinal.callPackage ./pkgs/pyluwen { };
+      faster-fifo = pyfinal.callPackage ./pkgs/faster-fifo { };
       tt-flash = pyfinal.callPackage ./pkgs/tt-flash { };
       tt-tools-common = pyfinal.callPackage ./pkgs/tt-tools-common { };
       vllm-tt = pyfinal.callPackage ./pkgs/vllm-tt { };

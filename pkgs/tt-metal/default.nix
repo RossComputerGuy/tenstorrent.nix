@@ -86,35 +86,35 @@ stdenv.mkDerivation (
     '';
 
     postPatch = ''
-      cp $cpm cmake/CPM.cmake
-      cp $cpm tt_metal/third_party/umd/cmake/CPM.cmake
-      patchShebangs .
-      substituteInPlace tt_metal/sfpi-info.sh --replace-fail "sfpi_dist=unknown" "sfpi_dist=debian"
-      # Cap'n Proto's local-find-package.patch hunks don't apply to 0.74 (block
-      # reordered); do them here so CPM finds nixpkgs capnproto offline. (0.74
-      # already renames googletest -> GTest upstream, so that rewrite is dropped.)
-      substituteInPlace third_party/CMakeLists.txt --replace-fail "NAME capnproto" "NAME CapnProto"
-      sed -i 's|^        capnproto_pthread.patch$|&\n    FIND_PACKAGE_ARGUMENTS GLOBAL|' third_party/CMakeLists.txt
+            cp $cpm cmake/CPM.cmake
+            cp $cpm tt_metal/third_party/umd/cmake/CPM.cmake
+            patchShebangs .
+            substituteInPlace tt_metal/sfpi-info.sh --replace-fail "sfpi_dist=unknown" "sfpi_dist=debian"
+            # Cap'n Proto's local-find-package.patch hunks don't apply to 0.74 (block
+            # reordered); do them here so CPM finds nixpkgs capnproto offline. (0.74
+            # already renames googletest -> GTest upstream, so that rewrite is dropped.)
+            substituteInPlace third_party/CMakeLists.txt --replace-fail "NAME capnproto" "NAME CapnProto"
+            sed -i 's|^        capnproto_pthread.patch$|&\n    FIND_PACKAGE_ARGUMENTS GLOBAL|' third_party/CMakeLists.txt
 
-      # Disable Tracy's profiler CLI tools + WASM viewer: they pull a GUI/web CPM
-      # stack (imgui/glfw/emsdk) and run `emsdk install` at configure. Only
-      # TracyClient is needed, and it's built earlier. Wrap csvexport..WASM in
-      # if(FALSE), then close it BEFORE the tracy_debug_categories header
-      # generation (new in 0.75) so that header is still emitted -- otherwise
-      # the compile fails on missing tracy_debug_categories_generated.hpp.
-      sed -i '/^add_subdirectory(tracy\/csvexport)$/i if(FALSE) # nix: profiler tools + WASM viewer disabled; TracyClient is built above' tt_metal/third_party/CMakeLists.txt
-      sed -i '/^set(_tt_tracy_categories_file /i endif() # nix: end tracy tools/WASM disable; keep the debug-categories header generation below' tt_metal/third_party/CMakeLists.txt
+            # Disable Tracy's profiler CLI tools + WASM viewer: they pull a GUI/web CPM
+            # stack (imgui/glfw/emsdk) and run `emsdk install` at configure. Only
+            # TracyClient is needed, and it's built earlier. Wrap csvexport..WASM in
+            # if(FALSE), then close it BEFORE the tracy_debug_categories header
+            # generation (new in 0.75) so that header is still emitted -- otherwise
+            # the compile fails on missing tracy_debug_categories_generated.hpp.
+            sed -i '/^add_subdirectory(tracy\/csvexport)$/i if(FALSE) # nix: profiler tools + WASM viewer disabled; TracyClient is built above' tt_metal/third_party/CMakeLists.txt
+            sed -i '/^set(_tt_tracy_categories_file /i endif() # nix: end tracy tools/WASM disable; keep the debug-categories header generation below' tt_metal/third_party/CMakeLists.txt
 
-      # The tracy python helper (imported unconditionally by `import ttnn`) does an
-      # mkdir of a profiler wasm-trace dir under TT_METAL_HOME at import time. That
-      # path lives in the read-only nix store, so the import aborts. Make the mkdir
-      # tolerant of a read-only store; profiling still works when TT_METAL_HOME is a
-      # writable runtime directory.
-      substituteInPlace tools/tracy/common.py \
-        --replace-fail 'PROFILER_WASM_TRACES_DIR.mkdir(parents=True, exist_ok=True)' 'try:
-    PROFILER_WASM_TRACES_DIR.mkdir(parents=True, exist_ok=True)
-except OSError:
-    pass'
+            # The tracy python helper (imported unconditionally by `import ttnn`) does an
+            # mkdir of a profiler wasm-trace dir under TT_METAL_HOME at import time. That
+            # path lives in the read-only nix store, so the import aborts. Make the mkdir
+            # tolerant of a read-only store; profiling still works when TT_METAL_HOME is a
+            # writable runtime directory.
+            substituteInPlace tools/tracy/common.py \
+              --replace-fail 'PROFILER_WASM_TRACES_DIR.mkdir(parents=True, exist_ok=True)' 'try:
+          PROFILER_WASM_TRACES_DIR.mkdir(parents=True, exist_ok=True)
+      except OSError:
+          pass'
     '';
 
     cmakeFlags = [

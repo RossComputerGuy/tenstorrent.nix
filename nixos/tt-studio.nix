@@ -86,6 +86,30 @@ in
       '';
     };
 
+    cloudSpeechUrl = mkOption {
+      type = types.nullOr types.str;
+      default = null;
+      example = "http://127.0.0.1:8030/v1/audio/transcriptions";
+      description = ''
+        Full speech-to-text endpoint the console posts mic audio to (the console's
+        cloud speech path). Point this at a tt-media-server Whisper instance's
+        `/v1/audio/transcriptions`. The backend forwards a multipart `file` and
+        expects JSON with a `text` field. Null (default) leaves speech-to-text
+        unconfigured.
+      '';
+    };
+
+    cloudSpeechAuthToken = mkOption {
+      type = types.str;
+      default = "sk-none";
+      description = ''
+        Bearer token the backend sends to the speech endpoint. Must match the
+        tt-media-server `API_KEY` (or any value when the server runs with NO_AUTH).
+        Must be non-empty for the same `Authorization: Bearer ` reason as the chat
+        token.
+      '';
+    };
+
     openFirewall = mkOption {
       type = types.bool;
       default = false;
@@ -121,9 +145,15 @@ in
         "tt-studio-chroma.service"
       ];
       wants = [ "tt-studio-chroma.service" ];
-      environment = backendEnv // {
-        CLOUD_CHAT_UI_AUTH_TOKEN = cfg.cloudChatAuthToken;
-      };
+      environment =
+        backendEnv
+        // {
+          CLOUD_CHAT_UI_AUTH_TOKEN = cfg.cloudChatAuthToken;
+        }
+        // lib.optionalAttrs (cfg.cloudSpeechUrl != null) {
+          CLOUD_SPEECH_RECOGNITION_URL = cfg.cloudSpeechUrl;
+          CLOUD_SPEECH_RECOGNITION_AUTH_TOKEN = cfg.cloudSpeechAuthToken;
+        };
       serviceConfig = {
         StateDirectory = "tt-studio";
         Restart = "on-failure";

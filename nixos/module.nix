@@ -28,7 +28,10 @@ let
   meshDescriptorPath = "${pkgs.tt-metal}/libexec/tt-metalium/tt_metal/fabric/mesh_graph_descriptors/${meshDescriptorFile}";
 in
 {
-  imports = [ ./tt-studio.nix ];
+  imports = [
+    ./tt-studio.nix
+    ./tt-whisper.nix
+  ];
 
   disabledModules = [ "hardware/tenstorrent.nix" ];
 
@@ -78,6 +81,22 @@ in
       description = ''
         Mesh device the vLLM plugin opens. "P150x4" is a four-card Blackhole
         QuietBox; "P150" is a single card. This sets the `MESH_DEVICE` variable.
+      '';
+    };
+
+    visibleDevices = mkOption {
+      type = types.nullOr types.str;
+      default = null;
+      example = "0";
+      description = ''
+        Restrict the server to specific chips by setting `TT_VISIBLE_DEVICES`
+        (and `TT_METAL_VISIBLE_DEVICES`), a comma-separated list of device ids.
+        The UMD cluster otherwise opens and locks EVERY chip on the box even when
+        `meshDevice` uses a subset, so this is required to leave chips free for
+        another service (for example running `services.tt-whisper` on a disjoint
+        chip). Null (default) lets the server see all chips. When pinning to a
+        single chip, set `meshName` to that chip's descriptor (e.g. "p150") so the
+        mesh graph maps onto the visible set.
       '';
     };
 
@@ -261,6 +280,11 @@ in
         # descriptor path through here as well.
         TT_MESH_GRAPH_DESC_PATH = meshDescriptorPath;
       }
+      // lib.optionalAttrs (vcfg.visibleDevices != null) {
+        # Pin the server to specific chips so it does not lock the whole box.
+        TT_VISIBLE_DEVICES = vcfg.visibleDevices;
+        TT_METAL_VISIBLE_DEVICES = vcfg.visibleDevices;
+      }
       // lib.optionalAttrs (vcfg.extraModelsDir != null) {
         # Register out-of-tree model bundles with the vLLM TT plugin.
         EXTRA_MODELS_DIR = toString vcfg.extraModelsDir;
@@ -303,11 +327,22 @@ in
                 --max-num-seqs ${toString vcfg.maxNumSeqs} \
                 --block-size ${toString vcfg.blockSize} \
                 ${lib.optionalString (vcfg.maxModelLen != null) "--max-model-len ${toString vcfg.maxModelLen}"} \
-                ${lib.optionalString (vcfg.maxNumBatchedTokens != null) "--max-num-batched-tokens ${toString vcfg.maxNumBatchedTokens}"} \
+                ${
+                  lib.optionalString (
+                    vcfg.maxNumBatchedTokens != null
+                  ) "--max-num-batched-tokens ${toString vcfg.maxNumBatchedTokens}"
+                } \
                 ${lib.optionalString vcfg.enableChunkedPrefill "--enable-chunked-prefill"} \
                 ${lib.optionalString vcfg.enablePrefixCaching "--enable-prefix-caching"} \
-                ${lib.optionalString (vcfg.reasoningParser != null) "--reasoning-parser ${lib.escapeShellArg vcfg.reasoningParser}"} \
-                ${lib.optionalString (vcfg.additionalConfig != { }) "--additional-config ${lib.escapeShellArg (builtins.toJSON { tt = vcfg.additionalConfig; })}"} \
+                ${
+                  lib.optionalString (
+                    vcfg.reasoningParser != null
+                  ) "--reasoning-parser ${lib.escapeShellArg vcfg.reasoningParser}"
+                } \
+                ${
+                  lib.optionalString (vcfg.additionalConfig != { })
+                    "--additional-config ${lib.escapeShellArg (builtins.toJSON { tt = vcfg.additionalConfig; })}"
+                } \
                 ${lib.escapeShellArgs vcfg.extraArgs}
             '';
           in
