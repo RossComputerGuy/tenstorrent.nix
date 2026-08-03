@@ -142,6 +142,22 @@ in
           else
             "${cfg.package}/bin/tt-media-serve";
         LoadCredential = lib.optional (cfg.apiKeyFile != null) "api-key:${cfg.apiKeyFile}";
+        # Run as a dedicated unprivileged user, not root. tt-metal opens the
+        # world-readable chip node (/dev/tenstorrent, 0666) and maps its 1GB
+        # hugepages from a mode-1777 hugetlbfs, both reachable without privilege.
+        User = "tt-whisper";
+        Group = "tt-whisper";
+        # The chip is a char device; DeviceAllow lets the confined unit reach it
+        # (mirrors the vLLM service). render covers the DRM render node.
+        DeviceAllow = [
+          "/dev/tenstorrent rw"
+          "char-* rw"
+        ];
+        SupplementaryGroups = [ "render" ];
+        # Root implicitly ignored the memlock limit; a non-root user pinning the
+        # hugepage DMA buffers can hit the default cap, so lift it.
+        LimitMEMLOCK = "infinity";
+        # systemd creates and chowns these to the service user.
         StateDirectory = "tt-whisper";
         CacheDirectory = "tt-whisper";
         Restart = "on-failure";
@@ -151,6 +167,13 @@ in
         TimeoutStartSec = "1200";
       };
     };
+
+    users.users.tt-whisper = {
+      isSystemUser = true;
+      group = "tt-whisper";
+      description = "tt-media-server Whisper service user";
+    };
+    users.groups.tt-whisper = { };
 
     networking.firewall.allowedTCPPorts = mkIf cfg.openFirewall [ cfg.port ];
   };

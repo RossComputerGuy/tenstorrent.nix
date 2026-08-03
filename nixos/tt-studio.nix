@@ -181,6 +181,12 @@ in
           CLOUD_SPEECH_RECOGNITION_AUTH_TOKEN = cfg.cloudSpeechAuthToken;
         };
       serviceConfig = {
+        # Run as a dedicated unprivileged user, not root. The backend only proxies
+        # HTTP (to the vLLM and Chroma endpoints) and writes its state under the
+        # StateDirectory, so it needs no privilege.
+        User = "tt-studio";
+        Group = "tt-studio";
+        # systemd creates and chowns this to the service user.
         StateDirectory = "tt-studio";
         Restart = "on-failure";
         RestartSec = "5";
@@ -252,6 +258,13 @@ in
           };
       };
     };
+
+    users.users.tt-studio = {
+      isSystemUser = true;
+      group = "tt-studio";
+      description = "tt-studio backend service user";
+    };
+    users.groups.tt-studio = { };
 
     networking.firewall.allowedTCPPorts = mkIf cfg.openFirewall [ cfg.port ];
   };
