@@ -82,7 +82,18 @@ in
       description = ''
         Bearer token the backend sends to the chat endpoint. vLLM ignores it when
         no API key is set, but it must be non-empty, an empty token produces an
-        illegal `Authorization: Bearer ` header that httpx rejects.
+        illegal `Authorization: Bearer ` header that httpx rejects. Inline values
+        land in the store, prefer `cloudChatAuthTokenFile` for real secrets.
+      '';
+    };
+
+    cloudChatAuthTokenFile = mkOption {
+      type = types.nullOr types.path;
+      default = null;
+      example = "/var/lib/secrets/chat-token";
+      description = ''
+        Path to a file (out of the store) holding the chat Bearer token. Read at
+        runtime via a systemd credential. Takes precedence over `cloudChatAuthToken`.
       '';
     };
 
@@ -106,7 +117,18 @@ in
         Bearer token the backend sends to the speech endpoint. Must match the
         tt-media-server `API_KEY` (or any value when the server runs with NO_AUTH).
         Must be non-empty for the same `Authorization: Bearer ` reason as the chat
-        token.
+        token. Inline values land in the store, prefer `cloudSpeechAuthTokenFile`.
+      '';
+    };
+
+    cloudSpeechAuthTokenFile = mkOption {
+      type = types.nullOr types.path;
+      default = null;
+      example = "/var/lib/secrets/whisper-api-key";
+      description = ''
+        Path to a file (out of the store) holding the speech Bearer token, read at
+        runtime via a systemd credential. Point this at the same file the
+        tt-whisper `apiKeyFile` uses. Takes precedence over `cloudSpeechAuthToken`.
       '';
     };
 
@@ -145,19 +167,30 @@ in
         "tt-studio-chroma.service"
       ];
       wants = [ "tt-studio-chroma.service" ];
+      # Auth tokens set inline here land in the store; the *File options load them
+      # from an out-of-store file into the env at runtime instead (see ExecStart).
       environment =
         backendEnv
-        // {
+        // lib.optionalAttrs (cfg.cloudChatAuthTokenFile == null) {
           CLOUD_CHAT_UI_AUTH_TOKEN = cfg.cloudChatAuthToken;
         }
         // lib.optionalAttrs (cfg.cloudSpeechUrl != null) {
           CLOUD_SPEECH_RECOGNITION_URL = cfg.cloudSpeechUrl;
+        }
+        // lib.optionalAttrs (cfg.cloudSpeechUrl != null && cfg.cloudSpeechAuthTokenFile == null) {
           CLOUD_SPEECH_RECOGNITION_AUTH_TOKEN = cfg.cloudSpeechAuthToken;
         };
       serviceConfig = {
         StateDirectory = "tt-studio";
         Restart = "on-failure";
         RestartSec = "5";
+        # Raw token files become systemd credentials (tmpfs, service-only), read
+        # into the env by the ExecStart wrapper; nothing secret is in the store.
+        LoadCredential =
+          (lib.optional (cfg.cloudChatAuthTokenFile != null) "chat-token:${cfg.cloudChatAuthTokenFile}")
+          ++ (lib.optional (
+            cfg.cloudSpeechAuthTokenFile != null
+          ) "speech-token:${cfg.cloudSpeechAuthTokenFile}");
         # Create the storage volumes the settings expect, run migrations, then serve.
         ExecStartPre = pkgs.writeShellScript "tt-studio-backend-pre" ''
           set -eu
@@ -165,8 +198,14 @@ in
                    "$INTERNAL_PERSISTENT_STORAGE_VOLUME/backend_volume"
           ${cfg.backend}/bin/tt-studio-manage migrate --noinput
         '';
-        ExecStart = ''
-          ${cfg.backend}/bin/tt-studio-backend \
+        ExecStart = pkgs.writeShellScript "tt-studio-backend-start" ''
+          ${lib.optionalString (
+            cfg.cloudChatAuthTokenFile != null
+          ) ''export CLOUD_CHAT_UI_AUTH_TOKEN="$(cat "$CREDENTIALS_DIRECTORY/chat-token")"''}
+          ${lib.optionalString (
+            cfg.cloudSpeechAuthTokenFile != null
+          ) ''export CLOUD_SPEECH_RECOGNITION_AUTH_TOKEN="$(cat "$CREDENTIALS_DIRECTORY/speech-token")"''}
+          exec ${cfg.backend}/bin/tt-studio-backend \
             --host ${backendHost} --port ${toString cfg.backendPort} \
             --workers 2 --timeout-keep-alive 1200
         '';

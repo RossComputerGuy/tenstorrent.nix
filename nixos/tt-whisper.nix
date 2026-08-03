@@ -70,7 +70,20 @@ in
       default = "sk-none";
       description = ''
         Bearer API key required on requests (`Authorization: Bearer <apiKey>`). Set
-        the tt-studio `cloudSpeechAuthToken` to the same value.
+        the tt-studio `cloudSpeechAuthToken` to the same value. WARNING: an inline
+        value lands in the world-readable nix store (the unit environment). Prefer
+        `apiKeyFile`.
+      '';
+    };
+
+    apiKeyFile = mkOption {
+      type = types.nullOr types.path;
+      default = null;
+      example = "/var/lib/secrets/whisper-api-key";
+      description = ''
+        Path to a file (on the machine, out of the store) holding the Bearer API
+        key. Loaded via a systemd credential and read into `API_KEY` at start, so
+        the secret never enters the store. Takes precedence over `apiKey`.
       '';
     };
 
@@ -105,7 +118,6 @@ in
         HF_HOME = "/var/cache/tt-whisper/huggingface";
         TT_MEDIA_HOST = cfg.host;
         TT_MEDIA_PORT = toString cfg.port;
-        API_KEY = cfg.apiKey;
         MODEL_RUNNER = "tt-whisper";
         MODEL = cfg.model;
         DEVICE = cfg.device;
@@ -113,9 +125,23 @@ in
         IS_GALAXY = "false";
         ALLOW_AUDIO_PREPROCESSING = lib.boolToString cfg.allowPreprocessing;
         DOWNLOAD_WEIGHTS_FROM_SERVICE = "false";
+      }
+      // lib.optionalAttrs (cfg.apiKeyFile == null) {
+        # Inline key (in the store). apiKeyFile injects API_KEY at runtime instead.
+        API_KEY = cfg.apiKey;
       };
       serviceConfig = {
-        ExecStart = "${cfg.package}/bin/tt-media-serve";
+        # With apiKeyFile the raw key is a systemd credential (tmpfs, service-only)
+        # read into API_KEY by a wrapper; nothing secret is in the store.
+        ExecStart =
+          if cfg.apiKeyFile != null then
+            pkgs.writeShellScript "tt-whisper-start" ''
+              export API_KEY="$(cat "$CREDENTIALS_DIRECTORY/api-key")"
+              exec ${cfg.package}/bin/tt-media-serve
+            ''
+          else
+            "${cfg.package}/bin/tt-media-serve";
+        LoadCredential = lib.optional (cfg.apiKeyFile != null) "api-key:${cfg.apiKeyFile}";
         StateDirectory = "tt-whisper";
         CacheDirectory = "tt-whisper";
         Restart = "on-failure";
