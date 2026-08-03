@@ -126,17 +126,30 @@ let
   '';
   # `jsonLiteral` must already be JSON-encoded (a valid Jinja double-quoted string).
   qwen3InjectPrefix =
-    jsonLiteral: ''
-      {%- if messages and messages[0].role != 'system' %}
-      {%- set messages = [{'role': 'system', 'content': ${jsonLiteral}}] + messages %}
-      {%- endif %}
-    '';
+    force: jsonLiteral:
+    if force then
+      # Force: drop any client-sent system message and make ours the only one, so
+      # the default (e.g. a CTF flag) is always present whatever the client sends.
+      ''
+        {%- set _ns = namespace(kept=[]) %}
+        {%- for _m in messages %}{%- if _m.role != 'system' %}{%- set _ns.kept = _ns.kept + [_m] %}{%- endif %}{%- endfor %}
+        {%- set messages = [{'role': 'system', 'content': ${jsonLiteral}}] + _ns.kept %}
+      ''
+    else
+      # Default: inject ours only when the client sent no system message.
+      ''
+        {%- if messages and messages[0].role != 'system' %}
+        {%- set messages = [{'role': 'system', 'content': ${jsonLiteral}}] + messages %}
+        {%- endif %}
+      '';
   # Build-time template for the inline `systemPrompt` option (prompt lands in the
   # store). `systemPromptFile` instead assembles this at start from the base file
   # below, keeping the prompt out of the store; see the serve script.
   qwen3SystemPromptTemplate =
-    prompt:
-    pkgs.writeText "qwen3-chat-template.jinja" (qwen3InjectPrefix (builtins.toJSON prompt) + qwen3ChatmlBase);
+    force: prompt:
+    pkgs.writeText "qwen3-chat-template.jinja" (
+      qwen3InjectPrefix force (builtins.toJSON prompt) + qwen3ChatmlBase
+    );
   # The bare base in the store; the serve script prepends a runtime-built prefix.
   qwen3ChatmlBaseFile = pkgs.writeText "qwen3-chatml-base.jinja" qwen3ChatmlBase;
 in
@@ -366,6 +379,18 @@ in
       '';
     };
 
+    systemPromptForce = mkOption {
+      type = types.bool;
+      default = false;
+      description = ''
+        Force the system prompt: strip any client-sent system message so
+        `systemPrompt`/`systemPromptFile` is always the only system message. Off
+        by default (a client-supplied system prompt wins). Turn ON for a CTF where
+        the prompt (e.g. a hidden flag) must reach the model even though the
+        client, such as the tt-studio console, sends its own system prompt.
+      '';
+    };
+
     extraArgs = mkOption {
       type = types.listOf types.str;
       default = [ ];
@@ -468,15 +493,26 @@ in
                 prompt_json="$(${pkgs.jq}/bin/jq -Rs 'rtrimstr("\n")' ${lib.escapeShellArg (toString vcfg.systemPromptFile)})"
                 chat_template="$RUNTIME_DIRECTORY/chat-template.jinja"
                 {
-                  printf '%s\n' "{%- if messages and messages[0].role != 'system' %}"
-                  printf '%s\n' "{%- set messages = [{'role': 'system', 'content': $prompt_json}] + messages %}"
-                  printf '%s\n' "{%- endif %}"
+                  ${
+                    if vcfg.systemPromptForce then
+                      ''
+                        printf '%s\n' "{%- set _ns = namespace(kept=[]) %}"
+                        printf '%s\n' "{%- for _m in messages %}{%- if _m.role != 'system' %}{%- set _ns.kept = _ns.kept + [_m] %}{%- endif %}{%- endfor %}"
+                        printf '%s\n' "{%- set messages = [{'role': 'system', 'content': $prompt_json}] + _ns.kept %}"
+                      ''
+                    else
+                      ''
+                        printf '%s\n' "{%- if messages and messages[0].role != 'system' %}"
+                        printf '%s\n' "{%- set messages = [{'role': 'system', 'content': $prompt_json}] + messages %}"
+                        printf '%s\n' "{%- endif %}"
+                      ''
+                  }
                   cat ${qwen3ChatmlBaseFile}
                 } > "$chat_template"
               ''}
               ${lib.optionalString (
                 vcfg.systemPromptFile == null && vcfg.systemPrompt != null
-              ) "chat_template=${qwen3SystemPromptTemplate vcfg.systemPrompt}"}
+              ) "chat_template=${qwen3SystemPromptTemplate vcfg.systemPromptForce vcfg.systemPrompt}"}
               # The 4-card sharding is driven by MESH_DEVICE (set in the service
               # environment), not by vLLM's --tensor-parallel-size: the TT backend
               # rejects vLLM's own distributed execution. tt-metal shards the model
