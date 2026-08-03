@@ -26,6 +26,119 @@ let
     else
       "${cfg.meshName}_mesh_graph_descriptor.textproto";
   meshDescriptorPath = "${pkgs.tt-metal}/libexec/tt-metalium/tt_metal/fabric/mesh_graph_descriptors/${meshDescriptorFile}";
+  # vLLM has no default-system-prompt flag, so to give the model a default system
+  # prompt we hand the OpenAI server a custom --chat-template. qwen3ChatmlBase is
+  # Qwen3-8B's own ChatML template (its <think> reasoning and tool-call blocks kept
+  # verbatim); qwen3InjectPrefix prepends a default system message ONLY when a
+  # request carries none, so a client-supplied system prompt still overrides it.
+  # The prompt is embedded as a JSON string, a valid Jinja literal (handles quotes
+  # and newlines). Assumes a Qwen3 / ChatML model; for others use extraArgs.
+  qwen3ChatmlBase = ''
+    {%- if tools %}
+        {{- '<|im_start|>system\n' }}
+        {%- if messages[0].role == 'system' %}
+            {{- messages[0].content + '\n\n' }}
+        {%- endif %}
+        {{- "# Tools\n\nYou may call one or more functions to assist with the user query.\n\nYou are provided with function signatures within <tools></tools> XML tags:\n<tools>" }}
+        {%- for tool in tools %}
+            {{- "\n" }}
+            {{- tool | tojson }}
+        {%- endfor %}
+        {{- "\n</tools>\n\nFor each function call, return a json object with function name and arguments within <tool_call></tool_call> XML tags:\n<tool_call>\n{\"name\": <function-name>, \"arguments\": <args-json-object>}\n</tool_call><|im_end|>\n" }}
+    {%- else %}
+        {%- if messages[0].role == 'system' %}
+            {{- '<|im_start|>system\n' + messages[0].content + '<|im_end|>\n' }}
+        {%- endif %}
+    {%- endif %}
+    {%- set ns = namespace(multi_step_tool=true, last_query_index=messages|length - 1) %}
+    {%- for message in messages[::-1] %}
+        {%- set index = (messages|length - 1) - loop.index0 %}
+        {%- if ns.multi_step_tool and message.role == "user" and message.content is string and not(message.content.startswith('<tool_response>') and message.content.endswith('</tool_response>')) %}
+            {%- set ns.multi_step_tool = false %}
+            {%- set ns.last_query_index = index %}
+        {%- endif %}
+    {%- endfor %}
+    {%- for message in messages %}
+        {%- if message.content is string %}
+            {%- set content = message.content %}
+        {%- else %}
+            {%- set content = ''' %}
+        {%- endif %}
+        {%- if (message.role == "user") or (message.role == "system" and not loop.first) %}
+            {{- '<|im_start|>' + message.role + '\n' + content + '<|im_end|>' + '\n' }}
+        {%- elif message.role == "assistant" %}
+            {%- set reasoning_content = ''' %}
+            {%- if message.reasoning_content is string %}
+                {%- set reasoning_content = message.reasoning_content %}
+            {%- else %}
+                {%- if '</think>' in content %}
+                    {%- set reasoning_content = content.split('</think>')[0].rstrip('\n').split('<think>')[-1].lstrip('\n') %}
+                    {%- set content = content.split('</think>')[-1].lstrip('\n') %}
+                {%- endif %}
+            {%- endif %}
+            {%- if loop.index0 > ns.last_query_index %}
+                {%- if loop.last or (not loop.last and reasoning_content) %}
+                    {{- '<|im_start|>' + message.role + '\n<think>\n' + reasoning_content.strip('\n') + '\n</think>\n\n' + content.lstrip('\n') }}
+                {%- else %}
+                    {{- '<|im_start|>' + message.role + '\n' + content }}
+                {%- endif %}
+            {%- else %}
+                {{- '<|im_start|>' + message.role + '\n' + content }}
+            {%- endif %}
+            {%- if message.tool_calls %}
+                {%- for tool_call in message.tool_calls %}
+                    {%- if (loop.first and content) or (not loop.first) %}
+                        {{- '\n' }}
+                    {%- endif %}
+                    {%- if tool_call.function %}
+                        {%- set tool_call = tool_call.function %}
+                    {%- endif %}
+                    {{- '<tool_call>\n{"name": "' }}
+                    {{- tool_call.name }}
+                    {{- '", "arguments": ' }}
+                    {%- if tool_call.arguments is string %}
+                        {{- tool_call.arguments }}
+                    {%- else %}
+                        {{- tool_call.arguments | tojson }}
+                    {%- endif %}
+                    {{- '}\n</tool_call>' }}
+                {%- endfor %}
+            {%- endif %}
+            {{- '<|im_end|>\n' }}
+        {%- elif message.role == "tool" %}
+            {%- if loop.first or (messages[loop.index0 - 1].role != "tool") %}
+                {{- '<|im_start|>user' }}
+            {%- endif %}
+            {{- '\n<tool_response>\n' }}
+            {{- content }}
+            {{- '\n</tool_response>' }}
+            {%- if loop.last or (messages[loop.index0 + 1].role != "tool") %}
+                {{- '<|im_end|>\n' }}
+            {%- endif %}
+        {%- endif %}
+    {%- endfor %}
+    {%- if add_generation_prompt %}
+        {{- '<|im_start|>assistant\n' }}
+        {%- if enable_thinking is defined and enable_thinking is false %}
+            {{- '<think>\n\n</think>\n\n' }}
+        {%- endif %}
+    {%- endif %}
+  '';
+  # `jsonLiteral` must already be JSON-encoded (a valid Jinja double-quoted string).
+  qwen3InjectPrefix =
+    jsonLiteral: ''
+      {%- if messages and messages[0].role != 'system' %}
+      {%- set messages = [{'role': 'system', 'content': ${jsonLiteral}}] + messages %}
+      {%- endif %}
+    '';
+  # Build-time template for the inline `systemPrompt` option (prompt lands in the
+  # store). `systemPromptFile` instead assembles this at start from the base file
+  # below, keeping the prompt out of the store; see the serve script.
+  qwen3SystemPromptTemplate =
+    prompt:
+    pkgs.writeText "qwen3-chat-template.jinja" (qwen3InjectPrefix (builtins.toJSON prompt) + qwen3ChatmlBase);
+  # The bare base in the store; the serve script prepends a runtime-built prefix.
+  qwen3ChatmlBaseFile = pkgs.writeText "qwen3-chatml-base.jinja" qwen3ChatmlBase;
 in
 {
   imports = [
@@ -226,6 +339,33 @@ in
       '';
     };
 
+    systemPrompt = mkOption {
+      type = types.nullOr types.str;
+      default = null;
+      example = "You are nix.vegas's assistant. Keep answers short.";
+      description = ''
+        Default system prompt baked into the served model through a custom vLLM
+        --chat-template. vLLM has no default-system-prompt flag, so this builds a
+        Qwen3 / ChatML template that injects this text as the system message when
+        a request sends none (a client-supplied system prompt still overrides it).
+        Null (default) keeps the model's own template. Assumes a Qwen3 / ChatML
+        model; for other families set the template yourself via extraArgs.
+      '';
+    };
+
+    systemPromptFile = mkOption {
+      type = types.nullOr types.path;
+      default = null;
+      example = "/etc/tt-vllm/system-prompt.txt";
+      description = ''
+        Path to a file on the machine (out of the store) holding the default
+        system prompt. Read at service start and assembled into the chat template
+        then, so the text never enters the world-readable store, use this to hide
+        a CTF flag in the prompt. Takes precedence over `systemPrompt`. Same
+        Qwen3 / ChatML assumption.
+      '';
+    };
+
     extraArgs = mkOption {
       type = types.listOf types.str;
       default = [ ];
@@ -298,6 +438,10 @@ in
 
         StateDirectory = "tt-vllm";
         CacheDirectory = "tt-vllm";
+        # Ephemeral tmpfs for a chat template built at start from systemPromptFile
+        # (keeps the prompt/flag out of the store); 0700 so only the service reads it.
+        RuntimeDirectory = "tt-vllm";
+        RuntimeDirectoryMode = "0700";
 
         # The Tenstorrent device and its hugepages must be reachable.
         DeviceAllow = [
@@ -316,6 +460,23 @@ in
               ${lib.optionalString (vcfg.tokenFile != null) ''
                 export HF_TOKEN="$(cat "$CREDENTIALS_DIRECTORY/hf-token")"
               ''}
+              # Build the --chat-template when a system prompt is set. systemPromptFile
+              # wins and is assembled here so its text (which may hold a CTF flag) never
+              # enters the store; jq -Rs makes the raw file a JSON string, a valid Jinja
+              # literal. The inline systemPrompt uses a template already in the store.
+              ${lib.optionalString (vcfg.systemPromptFile != null) ''
+                prompt_json="$(${pkgs.jq}/bin/jq -Rs 'rtrimstr("\n")' ${lib.escapeShellArg (toString vcfg.systemPromptFile)})"
+                chat_template="$RUNTIME_DIRECTORY/chat-template.jinja"
+                {
+                  printf '%s\n' "{%- if messages and messages[0].role != 'system' %}"
+                  printf '%s\n' "{%- set messages = [{'role': 'system', 'content': $prompt_json}] + messages %}"
+                  printf '%s\n' "{%- endif %}"
+                  cat ${qwen3ChatmlBaseFile}
+                } > "$chat_template"
+              ''}
+              ${lib.optionalString (
+                vcfg.systemPromptFile == null && vcfg.systemPrompt != null
+              ) "chat_template=${qwen3SystemPromptTemplate vcfg.systemPrompt}"}
               # The 4-card sharding is driven by MESH_DEVICE (set in the service
               # environment), not by vLLM's --tensor-parallel-size: the TT backend
               # rejects vLLM's own distributed execution. tt-metal shards the model
@@ -338,6 +499,11 @@ in
                   lib.optionalString (
                     vcfg.reasoningParser != null
                   ) "--reasoning-parser ${lib.escapeShellArg vcfg.reasoningParser}"
+                } \
+                ${
+                  lib.optionalString (
+                    vcfg.systemPrompt != null || vcfg.systemPromptFile != null
+                  ) "--chat-template \"$chat_template\""
                 } \
                 ${
                   lib.optionalString (vcfg.additionalConfig != { })

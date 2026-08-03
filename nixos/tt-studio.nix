@@ -28,6 +28,12 @@ let
     CHROMA_DB_HOST = chromaHost;
     CHROMA_DB_PORT = toString cfg.chromaPort;
     CLOUD_CHAT_UI_URL = cfg.cloudChatUrl;
+    # The backend fetches the Chroma embedding model (all-MiniLM-L6-v2) through
+    # huggingface_hub at Django ready(). As a non-root user HOME is /var/empty, so
+    # point HOME and the HF cache at writable dirs (CacheDirectory below) or the
+    # download fails with "Operation not permitted: /var/empty/.cache".
+    HOME = "/var/lib/tt-studio";
+    HF_HOME = "/var/cache/tt-studio/huggingface";
   };
 in
 {
@@ -186,8 +192,10 @@ in
         # StateDirectory, so it needs no privilege.
         User = "tt-studio";
         Group = "tt-studio";
-        # systemd creates and chowns this to the service user.
+        # systemd creates and chowns these to the service user. CacheDirectory
+        # backs HF_HOME (the embedding-model download) at /var/cache/tt-studio.
         StateDirectory = "tt-studio";
+        CacheDirectory = "tt-studio";
         Restart = "on-failure";
         RestartSec = "5";
         # Raw token files become systemd credentials (tmpfs, service-only), read
